@@ -20,6 +20,46 @@ import {
 } from 'three/tsl'
 
 // ============================================================================
+// SHADER LOADING UTILITIES
+// ============================================================================
+
+interface ShaderConfig {
+  vertexPath: string
+  fragmentPath: string
+}
+
+class ShaderLoader {
+  private static cache: Map<string, string> = new Map()
+
+  public static async loadShader(path: string): Promise<string> {
+    if (this.cache.has(path)) {
+      return this.cache.get(path)!
+    }
+
+    try {
+      const response = await fetch(path)
+      if (!response.ok) {
+        throw new Error(`Failed to load shader: ${path}`)
+      }
+      const content = await response.text()
+      this.cache.set(path, content)
+      return content
+    } catch (error) {
+      console.error(`Error loading shader ${path}:`, error)
+      throw error
+    }
+  }
+
+  public static async loadShaderPair(config: ShaderConfig): Promise<{ vertex: string; fragment: string }> {
+    const [vertex, fragment] = await Promise.all([
+      this.loadShader(config.vertexPath),
+      this.loadShader(config.fragmentPath)
+    ])
+    return { vertex, fragment }
+  }
+}
+
+// ============================================================================
 // TYPESCRIPT INTERFACES & TYPES
 // ============================================================================
 
@@ -569,9 +609,9 @@ class IntegratedThreeJSApp {
   private async createContent(): Promise<void> {
     this.addLighting()
     this.createSkySystem()
-    this.createAnimatedObjects()
+    await this.createAnimatedObjects()
     await this.createShaderObjects()
-    this.createTSLObjects()
+    await this.createTSLObjects()
   }
 
   private addLighting(): void {
@@ -672,346 +712,73 @@ class IntegratedThreeJSApp {
       new THREE.CylinderGeometry(0.3, 0.3, 1, 16)
     ]
 
-    // Define unique shaders for each mesh
-    const shaderConfigs = [
-      // Box: Noise shader
-      {
-        vertexShader: `
-          uniform float uTime;
-          uniform float uAmplitude;
-          attribute float aRandom;
-
-          varying vec2 vUv;
-          varying vec3 vPosition;
-          varying float vRandom;
-          varying float vNoise;
-
-          float noise(vec3 p) {
-              return fract(sin(dot(p, vec3(12.9898, 78.233, 54.53))) * 43758.5453);
-          }
-
-          void main() {
-              vec4 modelPosition = modelMatrix * vec4(position, 1.0);
-              
-              vec3 noisePos = modelPosition.xyz * 2.0 + uTime * 0.5;
-              float noiseValue = noise(noisePos);
-              vNoise = noiseValue;
-              
-              vec3 displaced = modelPosition.xyz + normal * noiseValue * uAmplitude;
-              modelPosition = vec4(displaced, 1.0);
-              
-              float pulse = sin(uTime * 2.0 + aRandom * 10.0) * 0.1;
-              modelPosition.xyz += normal * pulse * uAmplitude;
-              
-              vec4 viewPosition = viewMatrix * modelPosition;
-              vec4 projectedPosition = projectionMatrix * viewPosition;
-              
-              gl_Position = projectedPosition;
-              
-              vUv = uv;
-              vPosition = modelPosition.xyz;
-              vRandom = aRandom;
-          }
-        `,
-        fragmentShader: `
-          uniform float uTime;
-          uniform vec3 uColorA;
-          uniform vec3 uColorB;
-
-          varying vec2 vUv;
-          varying vec3 vPosition;
-          varying float vRandom;
-          varying float vNoise;
-
-          void main() {
-              float mixValue = vNoise;
-              mixValue += sin(uTime * 1.5 + vRandom * 6.28) * 0.3;
-              
-              vec3 fireColor1 = vec3(1.0, 0.3, 0.1);
-              vec3 fireColor2 = vec3(1.0, 0.8, 0.0);
-              vec3 fireColor3 = vec3(0.8, 0.1, 0.0);
-              
-              vec3 color1 = mix(fireColor1, fireColor2, mixValue);
-              vec3 finalColor = mix(color1, fireColor3, sin(uTime + vNoise * 10.0) * 0.5 + 0.5);
-              
-              float intensity = vNoise * 0.5 + 0.5;
-              finalColor *= intensity;
-              
-              float flicker = sin(uTime * 8.0 + vRandom * 20.0) * 0.1 + 0.9;
-              finalColor *= flicker;
-              
-              gl_FragColor = vec4(finalColor, 1.0);
-          }
-        `
-      },
-      // Sphere: Spiral shader
-      {
-        vertexShader: `
-          uniform float uTime;
-          uniform float uAmplitude;
-          attribute float aRandom;
-
-          varying vec2 vUv;
-          varying vec3 vPosition;
-          varying float vRandom;
-          varying float vSpiral;
-
-          void main() {
-              vec4 modelPosition = modelMatrix * vec4(position, 1.0);
-              
-              float distance = length(modelPosition.xz);
-              float angle = atan(modelPosition.z, modelPosition.x);
-              float spiralAngle = angle + distance * 2.0 + uTime * 2.0;
-              
-              float spiralRadius = distance + sin(modelPosition.y * 4.0 + uTime) * uAmplitude * 0.3;
-              modelPosition.x = cos(spiralAngle) * spiralRadius;
-              modelPosition.z = sin(spiralAngle) * spiralRadius;
-              
-              modelPosition.y += sin(distance * 3.0 + uTime * 1.5) * uAmplitude * 0.5;
-              
-              vSpiral = sin(spiralAngle + uTime) * 0.5 + 0.5;
-              
-              vec4 viewPosition = viewMatrix * modelPosition;
-              vec4 projectedPosition = projectionMatrix * viewPosition;
-              
-              gl_Position = projectedPosition;
-              
-              vUv = uv;
-              vPosition = modelPosition.xyz;
-              vRandom = aRandom;
-          }
-        `,
-        fragmentShader: `
-          uniform float uTime;
-          uniform vec3 uColorA;
-          uniform vec3 uColorB;
-
-          varying vec2 vUv;
-          varying vec3 vPosition;
-          varying float vRandom;
-          varying float vSpiral;
-
-          void main() {
-              float mixValue = vSpiral;
-              float radial = length(vUv - 0.5) * 2.0;
-              mixValue += radial * 0.3;
-              
-              vec3 oceanColor1 = vec3(0.0, 0.8, 0.4);
-              vec3 oceanColor2 = vec3(0.2, 1.0, 0.8);
-              vec3 oceanColor3 = vec3(0.0, 0.4, 0.8);
-              
-              vec3 color1 = mix(oceanColor1, oceanColor2, mixValue);
-              vec3 finalColor = mix(color1, oceanColor3, sin(uTime * 0.8 + vSpiral * 6.28) * 0.5 + 0.5);
-              
-              float bands = sin(vSpiral * 12.0 + uTime * 3.0) * 0.2 + 0.8;
-              finalColor *= bands;
-              
-              float shimmer = sin(vUv.x * 20.0 + uTime * 4.0) * sin(vUv.y * 20.0 + uTime * 3.0) * 0.1 + 0.9;
-              finalColor *= shimmer;
-              
-              gl_FragColor = vec4(finalColor, 1.0);
-          }
-        `
-      },
-      // Cone: Pulse shader
-      {
-        vertexShader: `
-          uniform float uTime;
-          uniform float uAmplitude;
-          attribute float aRandom;
-
-          varying vec2 vUv;
-          varying vec3 vPosition;
-          varying float vRandom;
-          varying float vPulse;
-
-          void main() {
-              vec4 modelPosition = modelMatrix * vec4(position, 1.0);
-              
-              float heightFactor = (modelPosition.y + 0.5) / 1.0;
-              float pulse = sin(uTime * 3.0) * 0.5 + 0.5;
-              
-              float scaleFactor = 1.0 + pulse * uAmplitude * heightFactor;
-              
-              modelPosition.x *= scaleFactor;
-              modelPosition.z *= scaleFactor;
-              
-              modelPosition.y += sin(uTime * 2.0 + aRandom * 6.28) * uAmplitude * 0.3;
-              
-              float secondaryPulse = sin(uTime * 5.0 + heightFactor * 3.14) * 0.2 + 0.8;
-              modelPosition.xyz *= secondaryPulse;
-              
-              vPulse = pulse;
-              
-              vec4 viewPosition = viewMatrix * modelPosition;
-              vec4 projectedPosition = projectionMatrix * viewPosition;
-              
-              gl_Position = projectedPosition;
-              
-              vUv = uv;
-              vPosition = modelPosition.xyz;
-              vRandom = aRandom;
-          }
-        `,
-        fragmentShader: `
-          uniform float uTime;
-          uniform vec3 uColorA;
-          uniform vec3 uColorB;
-
-          varying vec2 vUv;
-          varying vec3 vPosition;
-          varying float vRandom;
-          varying float vPulse;
-
-          void main() {
-              float mixValue = vPulse;
-              float gradient = vUv.y;
-              mixValue = mix(mixValue, gradient, 0.5);
-              
-              vec3 plasmaColor1 = vec3(0.2, 0.3, 1.0);
-              vec3 plasmaColor2 = vec3(0.8, 0.2, 1.0);
-              vec3 plasmaColor3 = vec3(0.0, 0.8, 1.0);
-              
-              vec3 color1 = mix(plasmaColor1, plasmaColor2, mixValue);
-              vec3 finalColor = mix(color1, plasmaColor3, sin(uTime * 2.0 + vPulse * 3.14) * 0.5 + 0.5);
-              
-              float intensity = vPulse * 0.7 + 0.3;
-              finalColor *= intensity;
-              
-              float arcs = sin(vUv.y * 30.0 + uTime * 6.0) * sin(vUv.x * 20.0 + uTime * 4.0);
-              arcs = smoothstep(0.7, 1.0, arcs) * 0.3 + 1.0;
-              finalColor *= arcs;
-              
-              float glow = 1.0 - length(vUv - 0.5) * 2.0;
-              glow = pow(glow, 2.0) * 0.5 + 0.5;
-              finalColor *= glow;
-              
-              gl_FragColor = vec4(finalColor, 1.0);
-          }
-        `
-      },
-      // Cylinder: Crystal shader
-      {
-        vertexShader: `
-          uniform float uTime;
-          uniform float uAmplitude;
-          attribute float aRandom;
-
-          varying vec2 vUv;
-          varying vec3 vPosition;
-          varying float vRandom;
-          varying float vCrystal;
-
-          void main() {
-              vec4 modelPosition = modelMatrix * vec4(position, 1.0);
-              
-              float facetFreq = 8.0;
-              float angle = atan(modelPosition.z, modelPosition.x);
-              float facetAngle = floor(angle * facetFreq / (2.0 * 3.14159)) * (2.0 * 3.14159) / facetFreq;
-              
-              float radius = length(modelPosition.xz);
-              modelPosition.x = cos(facetAngle) * radius;
-              modelPosition.z = sin(facetAngle) * radius;
-              
-              float growth = sin(uTime * 1.5 + aRandom * 6.28) * 0.5 + 0.5;
-              float heightFactor = (modelPosition.y + 0.5) / 1.0;
-              
-              float edgeDistance = abs(radius - 0.3);
-              float growthAmount = growth * uAmplitude * (1.0 + edgeDistance * 2.0);
-              
-              vec3 direction = normalize(vec3(modelPosition.x, 0.0, modelPosition.z));
-              modelPosition.xyz += direction * growthAmount * heightFactor;
-              
-              float segments = sin(modelPosition.y * 10.0 + uTime * 0.5) * 0.1 + 1.0;
-              modelPosition.x *= segments;
-              modelPosition.z *= segments;
-              
-              vCrystal = growth;
-              
-              vec4 viewPosition = viewMatrix * modelPosition;
-              vec4 projectedPosition = projectionMatrix * viewPosition;
-              
-              gl_Position = projectedPosition;
-              
-              vUv = uv;
-              vPosition = modelPosition.xyz;
-              vRandom = aRandom;
-          }
-        `,
-        fragmentShader: `
-          uniform float uTime;
-          uniform vec3 uColorA;
-          uniform vec3 uColorB;
-
-          varying vec2 vUv;
-          varying vec3 vPosition;
-          varying float vRandom;
-          varying float vCrystal;
-
-          void main() {
-              float mixValue = vCrystal;
-              
-              float facetLight = abs(sin(vUv.x * 16.0) * sin(vUv.y * 12.0));
-              mixValue = mix(mixValue, facetLight, 0.6);
-              
-              vec3 crystalColor1 = vec3(1.0, 0.8, 0.2);
-              vec3 crystalColor2 = vec3(1.0, 0.6, 0.0);
-              vec3 crystalColor3 = vec3(1.0, 1.0, 0.4);
-              
-              vec3 color1 = mix(crystalColor1, crystalColor2, mixValue);
-              vec3 finalColor = mix(color1, crystalColor3, sin(uTime * 1.2 + vCrystal * 6.28) * 0.5 + 0.5);
-              
-              float refraction = sin(vUv.x * 20.0 + uTime * 2.0) * sin(vUv.y * 15.0 + uTime * 1.5) * 0.3 + 0.7;
-              finalColor *= refraction;
-              
-              float innerGlow = 1.0 - abs(vUv.x - 0.5) * abs(vUv.y - 0.5) * 4.0;
-              innerGlow = pow(innerGlow, 3.0) * 0.4 + 0.6;
-              finalColor *= innerGlow;
-              
-              float sparkle = sin(vUv.x * 50.0 + uTime * 8.0) * sin(vUv.y * 40.0 + uTime * 6.0);
-              sparkle = smoothstep(0.8, 1.0, sparkle) * 0.5 + 1.0;
-              finalColor *= sparkle;
-              
-              gl_FragColor = vec4(finalColor, 1.0);
-          }
-        `
-      }
+    // Define shader configurations for each mesh
+    const shaderConfigs: ShaderConfig[] = [
+      { vertexPath: 'src/shaders/noise-vertex.glsl', fragmentPath: 'src/shaders/noise-fragment.glsl' },      // Box: Noise shader
+      { vertexPath: 'src/shaders/spiral-vertex.glsl', fragmentPath: 'src/shaders/spiral-fragment.glsl' },   // Sphere: Spiral shader
+      { vertexPath: 'src/shaders/pulse-vertex.glsl', fragmentPath: 'src/shaders/pulse-fragment.glsl' },     // Cone: Pulse shader
+      { vertexPath: 'src/shaders/crystal-vertex.glsl', fragmentPath: 'src/shaders/crystal-fragment.glsl' }  // Cylinder: Crystal shader
     ]
 
     for (let i = 0; i < 4; i++) {
-      // Add random attributes to geometry
-      const geometry = geometries[i]
-      const positionAttribute = geometry.getAttribute('position')
-      const randomValues = new Float32Array(positionAttribute.count)
-      
-      for (let j = 0; j < randomValues.length; j++) {
-        randomValues[j] = Math.random()
-      }
-      
-      geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
-      
-      // Create shader material
-      const material = new THREE.ShaderMaterial({
-        vertexShader: shaderConfigs[i].vertexShader,
-        fragmentShader: shaderConfigs[i].fragmentShader,
-        uniforms: {
-          uTime: { value: 0 },
-          uAmplitude: { value: 0.2 },
-          uColorA: { value: new THREE.Color(0xff0040) },
-          uColorB: { value: new THREE.Color(0x0040ff) }
-        },
-        side: THREE.DoubleSide,
-        transparent: false
-      })
+      try {
+        // Load shader pair from external files
+        const { vertex: vertexShader, fragment: fragmentShader } = await ShaderLoader.loadShaderPair(shaderConfigs[i])
 
-      const mesh = new THREE.Mesh(geometry, material)
-      mesh.position.set((i - 1.5) * 3, 0, 0)
-      mesh.userData = { id: `animated-${i}`, type: 'animated', material: material }
-      
-      this.scene.add(mesh)
-      this.animatedObjects.set(`animated-${i}`, mesh)
-      
-      this.createAnimationForObject(mesh, i)
+        // Add random attributes to geometry
+        const geometry = geometries[i]
+        const positionAttribute = geometry.getAttribute('position')
+        const randomValues = new Float32Array(positionAttribute.count)
+        
+        for (let j = 0; j < randomValues.length; j++) {
+          randomValues[j] = Math.random()
+        }
+        
+        geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
+        
+        // Create shader material using loaded external shaders
+        const material = new THREE.ShaderMaterial({
+          vertexShader,
+          fragmentShader,
+          uniforms: {
+            uTime: { value: 0 },
+            uAmplitude: { value: 0.2 },
+            uColorA: { value: new THREE.Color(0xff0040) },
+            uColorB: { value: new THREE.Color(0x0040ff) }
+          },
+          side: THREE.DoubleSide,
+          transparent: false
+        })
+
+        const mesh = new THREE.Mesh(geometry, material)
+        mesh.position.set((i - 1.5) * 3, 0, 0)
+        mesh.userData = { id: `animated-${i}`, type: 'animated', material: material }
+        
+        this.scene.add(mesh)
+        this.animatedObjects.set(`animated-${i}`, mesh)
+        
+        this.createAnimationForObject(mesh, i)
+
+      } catch (error) {
+        console.error(`Failed to load shaders for mesh ${i}:`, error)
+        
+        // Fallback to basic material if shader loading fails
+        const fallbackMaterial = new THREE.MeshStandardMaterial({
+          color: 0xff0040,
+          metalness: 0.1,
+          roughness: 0.4,
+          emissive: 0x330011
+        })
+        
+        const geometry = geometries[i]
+        const mesh = new THREE.Mesh(geometry, fallbackMaterial)
+        mesh.position.set((i - 1.5) * 3, 0, 0)
+        mesh.userData = { id: `animated-${i}`, type: 'animated', material: fallbackMaterial }
+        
+        this.scene.add(mesh)
+        this.animatedObjects.set(`animated-${i}`, mesh)
+        this.createAnimationForObject(mesh, i)
+      }
     }
   }
 
@@ -1078,65 +845,11 @@ class IntegratedThreeJSApp {
 
   private async createShaderObjects(): Promise<void> {
     try {
-      // Define shaders directly to avoid fetch/CORS issues
-      const vertexShader = `
-        uniform float uTime;
-        uniform float uAmplitude;
-        attribute float aRandom;
-
-        varying vec2 vUv;
-        varying vec3 vPosition;
-        varying float vRandom;
-
-        void main() {
-            vec4 modelPosition = modelMatrix * vec4(position, 1.0);
-            
-            // Add wave animation
-            modelPosition.y += sin(modelPosition.x * 4.0 + uTime) * uAmplitude;
-            modelPosition.y += sin(modelPosition.z * 2.0 + uTime * 0.5) * uAmplitude * 0.5;
-            
-            // Add random offset
-            modelPosition.y += aRandom * 0.1;
-            
-            vec4 viewPosition = viewMatrix * modelPosition;
-            vec4 projectedPosition = projectionMatrix * viewPosition;
-            
-            gl_Position = projectedPosition;
-            
-            // Pass to fragment shader
-            vUv = uv;
-            vPosition = modelPosition.xyz;
-            vRandom = aRandom;
-        }
-      `
-      
-      const fragmentShader = `
-        uniform float uTime;
-        uniform vec3 uColorA;
-        uniform vec3 uColorB;
-
-        varying vec2 vUv;
-        varying vec3 vPosition;
-        varying float vRandom;
-
-        void main() {
-            // Create gradient based on position
-            float mixValue = sin(vPosition.y * 0.5 + uTime) * 0.5 + 0.5;
-            mixValue *= sin(vPosition.x * 0.3 + uTime * 0.7) * 0.5 + 0.5;
-            
-            // Add random variation
-            mixValue += vRandom * 0.1;
-            
-            // Mix colors
-            vec3 color = mix(uColorA, uColorB, mixValue);
-            
-            // Add some brightness variation
-            float brightness = sin(vUv.x * 10.0 + uTime * 2.0) * 0.1 + 0.9;
-            color *= brightness;
-            
-            gl_FragColor = vec4(color, 1.0);
-        }
-      `
+      // Load main wave shader from external files
+      const { vertex: vertexShader, fragment: fragmentShader } = await ShaderLoader.loadShaderPair({
+        vertexPath: 'src/shaders/vertex.glsl',
+        fragmentPath: 'src/shaders/fragment.glsl'
+      })
       
       // Create geometry with random attributes (as expected by the shader)
       const geometry = new THREE.PlaneGeometry(4, 4, 32, 32)
@@ -1197,7 +910,7 @@ class IntegratedThreeJSApp {
     }
   }
 
-  private createTSLObjects(): void {
+  private async createTSLObjects(): Promise<void> {
     // Create holographic icosahedron
     const geometry = new THREE.IcosahedronGeometry(1, 4)
     
@@ -1211,105 +924,16 @@ class IntegratedThreeJSApp {
     
     geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
     
+    // Load holographic shader from external files
+    const { vertex: holoVertexShader, fragment: holoFragmentShader } = await ShaderLoader.loadShaderPair({
+      vertexPath: 'src/shaders/hologram-vertex.glsl',
+      fragmentPath: 'src/shaders/hologram-fragment.glsl'
+    })
+
     // Create holographic shader material
     const holographicMaterial = new THREE.ShaderMaterial({
-      vertexShader: `
-        uniform float uTime;
-        uniform float uAmplitude;
-        attribute float aRandom;
-
-        varying vec2 vUv;
-        varying vec3 vPosition;
-        varying float vRandom;
-        varying float vHolo;
-        varying vec3 vNormal;
-
-        void main() {
-            vec4 modelPosition = modelMatrix * vec4(position, 1.0);
-            
-            // Create holographic distortion
-            float distortion = sin(modelPosition.x * 3.0 + uTime * 2.0) * sin(modelPosition.y * 4.0 + uTime * 1.5) * sin(modelPosition.z * 2.5 + uTime * 1.8);
-            
-            // Apply distortion along normals
-            vec3 displaced = modelPosition.xyz + normal * distortion * uAmplitude * 0.2;
-            modelPosition = vec4(displaced, 1.0);
-            
-            // Create scanning lines effect
-            float scanLines = sin(modelPosition.y * 20.0 + uTime * 10.0) * 0.05;
-            modelPosition.y += scanLines;
-            
-            // Add holographic flickering
-            float flicker = sin(uTime * 15.0 + aRandom * 10.0) * 0.02 + 1.0;
-            modelPosition.xyz *= flicker;
-            
-            // Create edge glow displacement
-            float edgeGlow = sin(uTime * 3.0) * 0.5 + 0.5;
-            modelPosition.xyz += normal * edgeGlow * uAmplitude * 0.1;
-            
-            // Store hologram value for fragment shader
-            vHolo = distortion * 0.5 + 0.5;
-            vNormal = normal;
-            
-            vec4 viewPosition = viewMatrix * modelPosition;
-            vec4 projectedPosition = projectionMatrix * viewPosition;
-            
-            gl_Position = projectedPosition;
-            
-            vUv = uv;
-            vPosition = modelPosition.xyz;
-            vRandom = aRandom;
-        }
-      `,
-      fragmentShader: `
-        uniform float uTime;
-        uniform vec3 uColorA;
-        uniform vec3 uColorB;
-
-        varying vec2 vUv;
-        varying vec3 vPosition;
-        varying float vRandom;
-        varying float vHolo;
-        varying vec3 vNormal;
-
-        void main() {
-            // Create iridescent color shift
-            float iridescence = sin(vHolo * 6.28 + uTime) * 0.5 + 0.5;
-            
-            // Add fresnel-like effect
-            float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0.0, 0.0, 1.0))), 2.0);
-            
-            // Create holographic colors (iridescent spectrum)
-            vec3 holoColor1 = vec3(1.0, 0.2, 0.8); // Magenta
-            vec3 holoColor2 = vec3(0.2, 1.0, 0.8); // Cyan
-            vec3 holoColor3 = vec3(0.8, 1.0, 0.2); // Yellow-green
-            vec3 holoColor4 = vec3(0.8, 0.2, 1.0); // Purple
-            
-            // Multi-step color mixing for iridescence
-            vec3 color1 = mix(holoColor1, holoColor2, iridescence);
-            vec3 color2 = mix(holoColor3, holoColor4, 1.0 - iridescence);
-            vec3 finalColor = mix(color1, color2, sin(uTime * 0.8 + vHolo * 4.0) * 0.5 + 0.5);
-            
-            // Apply fresnel effect
-            finalColor = mix(finalColor * 0.3, finalColor, fresnel);
-            
-            // Add scanning lines
-            float scanLines = sin(vUv.y * 100.0 + uTime * 20.0) * 0.1 + 0.9;
-            finalColor *= scanLines;
-            
-            // Add holographic interference
-            float interference = sin(vUv.x * 50.0 + uTime * 8.0) * sin(vUv.y * 30.0 + uTime * 6.0) * 0.1 + 0.9;
-            finalColor *= interference;
-            
-            // Add transparency with edge glow
-            float alpha = fresnel * 0.7 + 0.3;
-            
-            // Add flickering effect
-            float flicker = sin(uTime * 12.0 + vRandom * 20.0) * 0.1 + 0.9;
-            finalColor *= flicker;
-            
-            gl_FragColor = vec4(finalColor, alpha);
-        }
-      `,
+      vertexShader: holoVertexShader,
+      fragmentShader: holoFragmentShader,
       uniforms: {
         uTime: { value: 0 },
         uAmplitude: { value: 0.15 },
