@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import Stats from 'three/addons/libs/stats.module.js'
 import { GUI } from 'dat.gui'
 import { Sky } from 'three/addons/objects/Sky.js'
+
 // TSL (Three Shader Language) - works with both WebGL and WebGPU!
 import { 
   sin, 
@@ -255,7 +256,7 @@ class IntegratedThreeJSApp {
   
   // Objects
   private animatedObjects: Map<string, THREE.Object3D> = new Map()
-  private shaderMaterial: THREE.MeshStandardMaterial | null = null
+  private shaderMaterial: THREE.ShaderMaterial | THREE.MeshStandardMaterial | null = null
   private animatedMaterial: THREE.MeshStandardMaterial | null = null
   
   // Sky System
@@ -289,12 +290,16 @@ class IntegratedThreeJSApp {
     this.inputMethods = this.detectInputMethods()
     this.animationSystem = new AnimationSystem()
     
+    this.init()
+  }
+
+  private async init(): Promise<void> {
     this.initScene()
     this.initCamera()
     this.initRenderer()
     this.initControls()
     this.initDebugSystem()
-    this.createContent()
+    await this.createContent()
     this.setupEventListeners()
     this.animate()
     
@@ -482,13 +487,21 @@ class IntegratedThreeJSApp {
       this.camera.updateProjectionMatrix()
     })
     
-          // TSL Material controls
+          // Material controls
       if (this.shaderMaterial) {
-        const tslFolder = gui.addFolder('TSL Material')
-        tslFolder.add(this.shaderMaterial, 'metalness', 0, 1).name('Metalness')
-        tslFolder.add(this.shaderMaterial, 'roughness', 0, 1).name('Roughness')
-        tslFolder.addColor(this.shaderMaterial, 'color').name('Base Color')
-        tslFolder.open()
+        if (this.shaderMaterial instanceof THREE.ShaderMaterial) {
+          const shaderFolder = gui.addFolder('Shader Material')
+          shaderFolder.add(this.shaderMaterial.uniforms.uAmplitude, 'value', 0, 1).name('Wave Amplitude')
+          shaderFolder.addColor(this.shaderMaterial.uniforms.uColorA, 'value').name('Color A')
+          shaderFolder.addColor(this.shaderMaterial.uniforms.uColorB, 'value').name('Color B')
+          shaderFolder.open()
+        } else if (this.shaderMaterial instanceof THREE.MeshStandardMaterial) {
+          const materialFolder = gui.addFolder('Standard Material')
+          materialFolder.add(this.shaderMaterial, 'metalness', 0, 1).name('Metalness')
+          materialFolder.add(this.shaderMaterial, 'roughness', 0, 1).name('Roughness')
+          materialFolder.addColor(this.shaderMaterial, 'color').name('Base Color')
+          materialFolder.open()
+        }
       }
 
       // Sky controls - Preetham atmospheric scattering parameters
@@ -553,19 +566,21 @@ class IntegratedThreeJSApp {
     this.debugState.helpers = []
   }
 
-  private createContent(): void {
+  private async createContent(): Promise<void> {
     this.addLighting()
     this.createSkySystem()
     this.createAnimatedObjects()
-    this.createShaderObjects()
+    await this.createShaderObjects()
     this.createTSLObjects()
   }
 
   private addLighting(): void {
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.6)
+    // Brighter ambient light to make materials more visible
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.8)
     this.scene.add(ambientLight)
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8)
+    // Main directional light (sun)
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0)
     directionalLight.position.set(10, 10, 5)
     directionalLight.castShadow = this.rendererConfig.shadows
     if (directionalLight.castShadow) {
@@ -573,6 +588,11 @@ class IntegratedThreeJSApp {
       directionalLight.shadow.mapSize.height = 2048
     }
     this.scene.add(directionalLight)
+
+    // Add fill light for better visibility
+    const fillLight = new THREE.DirectionalLight(0x8899ff, 0.4)
+    fillLight.position.set(-5, 5, -5)
+    this.scene.add(fillLight)
   }
 
   private createSkySystem(): void {
@@ -643,8 +663,8 @@ class IntegratedThreeJSApp {
     skyUniforms['mieDirectionalG'].value = this.skyConfig.mieDirectionalG
   }
 
-  private createAnimatedObjects(): void {
-    // Create basic animated objects
+  private async createAnimatedObjects(): Promise<void> {
+    // Create geometries
     const geometries = [
       new THREE.BoxGeometry(1, 1, 1),
       new THREE.SphereGeometry(0.5, 32, 32),
@@ -652,19 +672,341 @@ class IntegratedThreeJSApp {
       new THREE.CylinderGeometry(0.3, 0.3, 1, 16)
     ]
 
-    const materials = [
-      new THREE.MeshStandardMaterial({ color: 0xff4444 }),
-      new THREE.MeshStandardMaterial({ color: 0x44ff44 }),
-      new THREE.MeshStandardMaterial({ color: 0x4444ff }),
-      new THREE.MeshStandardMaterial({ color: 0xffff44 })
+    // Define unique shaders for each mesh
+    const shaderConfigs = [
+      // Box: Noise shader
+      {
+        vertexShader: `
+          uniform float uTime;
+          uniform float uAmplitude;
+          attribute float aRandom;
+
+          varying vec2 vUv;
+          varying vec3 vPosition;
+          varying float vRandom;
+          varying float vNoise;
+
+          float noise(vec3 p) {
+              return fract(sin(dot(p, vec3(12.9898, 78.233, 54.53))) * 43758.5453);
+          }
+
+          void main() {
+              vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+              
+              vec3 noisePos = modelPosition.xyz * 2.0 + uTime * 0.5;
+              float noiseValue = noise(noisePos);
+              vNoise = noiseValue;
+              
+              vec3 displaced = modelPosition.xyz + normal * noiseValue * uAmplitude;
+              modelPosition = vec4(displaced, 1.0);
+              
+              float pulse = sin(uTime * 2.0 + aRandom * 10.0) * 0.1;
+              modelPosition.xyz += normal * pulse * uAmplitude;
+              
+              vec4 viewPosition = viewMatrix * modelPosition;
+              vec4 projectedPosition = projectionMatrix * viewPosition;
+              
+              gl_Position = projectedPosition;
+              
+              vUv = uv;
+              vPosition = modelPosition.xyz;
+              vRandom = aRandom;
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform vec3 uColorA;
+          uniform vec3 uColorB;
+
+          varying vec2 vUv;
+          varying vec3 vPosition;
+          varying float vRandom;
+          varying float vNoise;
+
+          void main() {
+              float mixValue = vNoise;
+              mixValue += sin(uTime * 1.5 + vRandom * 6.28) * 0.3;
+              
+              vec3 fireColor1 = vec3(1.0, 0.3, 0.1);
+              vec3 fireColor2 = vec3(1.0, 0.8, 0.0);
+              vec3 fireColor3 = vec3(0.8, 0.1, 0.0);
+              
+              vec3 color1 = mix(fireColor1, fireColor2, mixValue);
+              vec3 finalColor = mix(color1, fireColor3, sin(uTime + vNoise * 10.0) * 0.5 + 0.5);
+              
+              float intensity = vNoise * 0.5 + 0.5;
+              finalColor *= intensity;
+              
+              float flicker = sin(uTime * 8.0 + vRandom * 20.0) * 0.1 + 0.9;
+              finalColor *= flicker;
+              
+              gl_FragColor = vec4(finalColor, 1.0);
+          }
+        `
+      },
+      // Sphere: Spiral shader
+      {
+        vertexShader: `
+          uniform float uTime;
+          uniform float uAmplitude;
+          attribute float aRandom;
+
+          varying vec2 vUv;
+          varying vec3 vPosition;
+          varying float vRandom;
+          varying float vSpiral;
+
+          void main() {
+              vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+              
+              float distance = length(modelPosition.xz);
+              float angle = atan(modelPosition.z, modelPosition.x);
+              float spiralAngle = angle + distance * 2.0 + uTime * 2.0;
+              
+              float spiralRadius = distance + sin(modelPosition.y * 4.0 + uTime) * uAmplitude * 0.3;
+              modelPosition.x = cos(spiralAngle) * spiralRadius;
+              modelPosition.z = sin(spiralAngle) * spiralRadius;
+              
+              modelPosition.y += sin(distance * 3.0 + uTime * 1.5) * uAmplitude * 0.5;
+              
+              vSpiral = sin(spiralAngle + uTime) * 0.5 + 0.5;
+              
+              vec4 viewPosition = viewMatrix * modelPosition;
+              vec4 projectedPosition = projectionMatrix * viewPosition;
+              
+              gl_Position = projectedPosition;
+              
+              vUv = uv;
+              vPosition = modelPosition.xyz;
+              vRandom = aRandom;
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform vec3 uColorA;
+          uniform vec3 uColorB;
+
+          varying vec2 vUv;
+          varying vec3 vPosition;
+          varying float vRandom;
+          varying float vSpiral;
+
+          void main() {
+              float mixValue = vSpiral;
+              float radial = length(vUv - 0.5) * 2.0;
+              mixValue += radial * 0.3;
+              
+              vec3 oceanColor1 = vec3(0.0, 0.8, 0.4);
+              vec3 oceanColor2 = vec3(0.2, 1.0, 0.8);
+              vec3 oceanColor3 = vec3(0.0, 0.4, 0.8);
+              
+              vec3 color1 = mix(oceanColor1, oceanColor2, mixValue);
+              vec3 finalColor = mix(color1, oceanColor3, sin(uTime * 0.8 + vSpiral * 6.28) * 0.5 + 0.5);
+              
+              float bands = sin(vSpiral * 12.0 + uTime * 3.0) * 0.2 + 0.8;
+              finalColor *= bands;
+              
+              float shimmer = sin(vUv.x * 20.0 + uTime * 4.0) * sin(vUv.y * 20.0 + uTime * 3.0) * 0.1 + 0.9;
+              finalColor *= shimmer;
+              
+              gl_FragColor = vec4(finalColor, 1.0);
+          }
+        `
+      },
+      // Cone: Pulse shader
+      {
+        vertexShader: `
+          uniform float uTime;
+          uniform float uAmplitude;
+          attribute float aRandom;
+
+          varying vec2 vUv;
+          varying vec3 vPosition;
+          varying float vRandom;
+          varying float vPulse;
+
+          void main() {
+              vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+              
+              float heightFactor = (modelPosition.y + 0.5) / 1.0;
+              float pulse = sin(uTime * 3.0) * 0.5 + 0.5;
+              
+              float scaleFactor = 1.0 + pulse * uAmplitude * heightFactor;
+              
+              modelPosition.x *= scaleFactor;
+              modelPosition.z *= scaleFactor;
+              
+              modelPosition.y += sin(uTime * 2.0 + aRandom * 6.28) * uAmplitude * 0.3;
+              
+              float secondaryPulse = sin(uTime * 5.0 + heightFactor * 3.14) * 0.2 + 0.8;
+              modelPosition.xyz *= secondaryPulse;
+              
+              vPulse = pulse;
+              
+              vec4 viewPosition = viewMatrix * modelPosition;
+              vec4 projectedPosition = projectionMatrix * viewPosition;
+              
+              gl_Position = projectedPosition;
+              
+              vUv = uv;
+              vPosition = modelPosition.xyz;
+              vRandom = aRandom;
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform vec3 uColorA;
+          uniform vec3 uColorB;
+
+          varying vec2 vUv;
+          varying vec3 vPosition;
+          varying float vRandom;
+          varying float vPulse;
+
+          void main() {
+              float mixValue = vPulse;
+              float gradient = vUv.y;
+              mixValue = mix(mixValue, gradient, 0.5);
+              
+              vec3 plasmaColor1 = vec3(0.2, 0.3, 1.0);
+              vec3 plasmaColor2 = vec3(0.8, 0.2, 1.0);
+              vec3 plasmaColor3 = vec3(0.0, 0.8, 1.0);
+              
+              vec3 color1 = mix(plasmaColor1, plasmaColor2, mixValue);
+              vec3 finalColor = mix(color1, plasmaColor3, sin(uTime * 2.0 + vPulse * 3.14) * 0.5 + 0.5);
+              
+              float intensity = vPulse * 0.7 + 0.3;
+              finalColor *= intensity;
+              
+              float arcs = sin(vUv.y * 30.0 + uTime * 6.0) * sin(vUv.x * 20.0 + uTime * 4.0);
+              arcs = smoothstep(0.7, 1.0, arcs) * 0.3 + 1.0;
+              finalColor *= arcs;
+              
+              float glow = 1.0 - length(vUv - 0.5) * 2.0;
+              glow = pow(glow, 2.0) * 0.5 + 0.5;
+              finalColor *= glow;
+              
+              gl_FragColor = vec4(finalColor, 1.0);
+          }
+        `
+      },
+      // Cylinder: Crystal shader
+      {
+        vertexShader: `
+          uniform float uTime;
+          uniform float uAmplitude;
+          attribute float aRandom;
+
+          varying vec2 vUv;
+          varying vec3 vPosition;
+          varying float vRandom;
+          varying float vCrystal;
+
+          void main() {
+              vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+              
+              float facetFreq = 8.0;
+              float angle = atan(modelPosition.z, modelPosition.x);
+              float facetAngle = floor(angle * facetFreq / (2.0 * 3.14159)) * (2.0 * 3.14159) / facetFreq;
+              
+              float radius = length(modelPosition.xz);
+              modelPosition.x = cos(facetAngle) * radius;
+              modelPosition.z = sin(facetAngle) * radius;
+              
+              float growth = sin(uTime * 1.5 + aRandom * 6.28) * 0.5 + 0.5;
+              float heightFactor = (modelPosition.y + 0.5) / 1.0;
+              
+              float edgeDistance = abs(radius - 0.3);
+              float growthAmount = growth * uAmplitude * (1.0 + edgeDistance * 2.0);
+              
+              vec3 direction = normalize(vec3(modelPosition.x, 0.0, modelPosition.z));
+              modelPosition.xyz += direction * growthAmount * heightFactor;
+              
+              float segments = sin(modelPosition.y * 10.0 + uTime * 0.5) * 0.1 + 1.0;
+              modelPosition.x *= segments;
+              modelPosition.z *= segments;
+              
+              vCrystal = growth;
+              
+              vec4 viewPosition = viewMatrix * modelPosition;
+              vec4 projectedPosition = projectionMatrix * viewPosition;
+              
+              gl_Position = projectedPosition;
+              
+              vUv = uv;
+              vPosition = modelPosition.xyz;
+              vRandom = aRandom;
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform vec3 uColorA;
+          uniform vec3 uColorB;
+
+          varying vec2 vUv;
+          varying vec3 vPosition;
+          varying float vRandom;
+          varying float vCrystal;
+
+          void main() {
+              float mixValue = vCrystal;
+              
+              float facetLight = abs(sin(vUv.x * 16.0) * sin(vUv.y * 12.0));
+              mixValue = mix(mixValue, facetLight, 0.6);
+              
+              vec3 crystalColor1 = vec3(1.0, 0.8, 0.2);
+              vec3 crystalColor2 = vec3(1.0, 0.6, 0.0);
+              vec3 crystalColor3 = vec3(1.0, 1.0, 0.4);
+              
+              vec3 color1 = mix(crystalColor1, crystalColor2, mixValue);
+              vec3 finalColor = mix(color1, crystalColor3, sin(uTime * 1.2 + vCrystal * 6.28) * 0.5 + 0.5);
+              
+              float refraction = sin(vUv.x * 20.0 + uTime * 2.0) * sin(vUv.y * 15.0 + uTime * 1.5) * 0.3 + 0.7;
+              finalColor *= refraction;
+              
+              float innerGlow = 1.0 - abs(vUv.x - 0.5) * abs(vUv.y - 0.5) * 4.0;
+              innerGlow = pow(innerGlow, 3.0) * 0.4 + 0.6;
+              finalColor *= innerGlow;
+              
+              float sparkle = sin(vUv.x * 50.0 + uTime * 8.0) * sin(vUv.y * 40.0 + uTime * 6.0);
+              sparkle = smoothstep(0.8, 1.0, sparkle) * 0.5 + 1.0;
+              finalColor *= sparkle;
+              
+              gl_FragColor = vec4(finalColor, 1.0);
+          }
+        `
+      }
     ]
 
     for (let i = 0; i < 4; i++) {
-      const mesh = new THREE.Mesh(geometries[i], materials[i])
+      // Add random attributes to geometry
+      const geometry = geometries[i]
+      const positionAttribute = geometry.getAttribute('position')
+      const randomValues = new Float32Array(positionAttribute.count)
+      
+      for (let j = 0; j < randomValues.length; j++) {
+        randomValues[j] = Math.random()
+      }
+      
+      geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
+      
+      // Create shader material
+      const material = new THREE.ShaderMaterial({
+        vertexShader: shaderConfigs[i].vertexShader,
+        fragmentShader: shaderConfigs[i].fragmentShader,
+        uniforms: {
+          uTime: { value: 0 },
+          uAmplitude: { value: 0.2 },
+          uColorA: { value: new THREE.Color(0xff0040) },
+          uColorB: { value: new THREE.Color(0x0040ff) }
+        },
+        side: THREE.DoubleSide,
+        transparent: false
+      })
+
+      const mesh = new THREE.Mesh(geometry, material)
       mesh.position.set((i - 1.5) * 3, 0, 0)
-      mesh.castShadow = true
-      mesh.receiveShadow = true
-      mesh.userData = { id: `animated-${i}`, type: 'animated' }
+      mesh.userData = { id: `animated-${i}`, type: 'animated', material: material }
       
       this.scene.add(mesh)
       this.animatedObjects.set(`animated-${i}`, mesh)
@@ -734,76 +1076,259 @@ class IntegratedThreeJSApp {
     animations[index]()
   }
 
-  private createShaderObjects(): void {
-    // Create TSL-based animated material for WebGL/WebGPU compatibility
-    const geometry = new THREE.PlaneGeometry(4, 4, 32, 32)
-    
-    // Create TSL material using the imported functions
-    // TSL compiles to GLSL for WebGL and WGSL for WebGPU
-    const tslMaterial = new THREE.MeshStandardMaterial({
-      color: 0xff0040,
-      metalness: 0.1,
-      roughness: 0.8
-    })
-    
-    // Create the mesh with TSL material
-    const tslMesh = new THREE.Mesh(geometry, tslMaterial)
-    tslMesh.position.set(-6, 0, 0)
-    tslMesh.rotation.x = -Math.PI * 0.25
-    tslMesh.castShadow = true
-    tslMesh.receiveShadow = true
-    this.scene.add(tslMesh)
-    
-    // Store reference for animation
-    this.shaderMaterial = tslMaterial as any // For compatibility with existing code
-    
-    // Create TSL-based animation using the uniform and time functions
-    const tslAnimation = this.animationSystem.createAnimation(tslMesh, {
-      duration: 5000,
-      easing: Easing.easeInOutSine || Easing.easeInOutQuad,
-      loop: true,
-      yoyo: true,
-      onUpdate: (progress) => {
-        // Animate the mesh position using TSL-inspired calculations
-        const timeValue = performance.now() * 0.001
-        const amplitude = 0.5
-        
-        // Create wave-like motion (simulating TSL sin functions)
-        const waveX = Math.sin(tslMesh.position.x * 4.0 + timeValue) * amplitude
-        const waveZ = Math.sin(tslMesh.position.z * 2.0 + timeValue * 0.5) * amplitude * 0.5
-        
-        tslMesh.position.y = waveX + waveZ + Math.sin(progress * Math.PI * 2) * 0.3
-        
-        // Animate colors (simulating TSL mix function)
-        const colorA = new THREE.Color(0xff0040)
-        const colorB = new THREE.Color(0x0040ff)
-        const mixValue = (Math.sin(timeValue) * 0.5 + 0.5) * progress
-        
-        tslMaterial.color.lerpColors(colorA, colorB, mixValue)
+  private async createShaderObjects(): Promise<void> {
+    try {
+      // Define shaders directly to avoid fetch/CORS issues
+      const vertexShader = `
+        uniform float uTime;
+        uniform float uAmplitude;
+        attribute float aRandom;
+
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        varying float vRandom;
+
+        void main() {
+            vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+            
+            // Add wave animation
+            modelPosition.y += sin(modelPosition.x * 4.0 + uTime) * uAmplitude;
+            modelPosition.y += sin(modelPosition.z * 2.0 + uTime * 0.5) * uAmplitude * 0.5;
+            
+            // Add random offset
+            modelPosition.y += aRandom * 0.1;
+            
+            vec4 viewPosition = viewMatrix * modelPosition;
+            vec4 projectedPosition = projectionMatrix * viewPosition;
+            
+            gl_Position = projectedPosition;
+            
+            // Pass to fragment shader
+            vUv = uv;
+            vPosition = modelPosition.xyz;
+            vRandom = aRandom;
+        }
+      `
+      
+      const fragmentShader = `
+        uniform float uTime;
+        uniform vec3 uColorA;
+        uniform vec3 uColorB;
+
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        varying float vRandom;
+
+        void main() {
+            // Create gradient based on position
+            float mixValue = sin(vPosition.y * 0.5 + uTime) * 0.5 + 0.5;
+            mixValue *= sin(vPosition.x * 0.3 + uTime * 0.7) * 0.5 + 0.5;
+            
+            // Add random variation
+            mixValue += vRandom * 0.1;
+            
+            // Mix colors
+            vec3 color = mix(uColorA, uColorB, mixValue);
+            
+            // Add some brightness variation
+            float brightness = sin(vUv.x * 10.0 + uTime * 2.0) * 0.1 + 0.9;
+            color *= brightness;
+            
+            gl_FragColor = vec4(color, 1.0);
+        }
+      `
+      
+      // Create geometry with random attributes (as expected by the shader)
+      const geometry = new THREE.PlaneGeometry(4, 4, 32, 32)
+      const positionAttribute = geometry.getAttribute('position')
+      const randomValues = new Float32Array(positionAttribute.count)
+      
+      for (let i = 0; i < randomValues.length; i++) {
+        randomValues[i] = Math.random()
       }
-    })
-    
-    tslAnimation.start()
-    this.animationSystem.addAnimation(tslAnimation)
+      
+      geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
+      
+      // Create shader material using the loaded GLSL shaders
+      const shaderMaterial = new THREE.ShaderMaterial({
+        vertexShader,
+        fragmentShader,
+        uniforms: {
+          uTime: { value: 0 },
+          uAmplitude: { value: 0.2 },
+          uColorA: { value: new THREE.Color(0xff0040) },
+          uColorB: { value: new THREE.Color(0x0040ff) }
+        },
+        side: THREE.DoubleSide,
+        transparent: true
+      })
+      
+      // Create the mesh with shader material
+      const shaderMesh = new THREE.Mesh(geometry, shaderMaterial)
+      shaderMesh.position.set(-6, 0, 0)
+      shaderMesh.rotation.x = -Math.PI * 0.25
+      this.scene.add(shaderMesh)
+      
+      // Store reference for animation
+      this.shaderMaterial = shaderMaterial
+      
+      console.log('✅ Custom GLSL shaders loaded and applied!')
+      
+    } catch (error) {
+      console.error('❌ Failed to load shaders:', error)
+      
+      // Fallback to simple material
+      const geometry = new THREE.PlaneGeometry(4, 4, 32, 32)
+      const fallbackMaterial = new THREE.MeshStandardMaterial({
+        color: 0xff0040,
+        metalness: 0.1,
+        roughness: 0.4,
+        emissive: 0x330011 // Add some emission to make it brighter
+      })
+      
+      const fallbackMesh = new THREE.Mesh(geometry, fallbackMaterial)
+      fallbackMesh.position.set(-6, 0, 0)
+      fallbackMesh.rotation.x = -Math.PI * 0.25
+      fallbackMesh.castShadow = true
+      fallbackMesh.receiveShadow = true
+      this.scene.add(fallbackMesh)
+      
+      this.shaderMaterial = fallbackMaterial
+    }
   }
 
   private createTSLObjects(): void {
-    // Create animated material (simulating TSL capabilities with traditional approach)
+    // Create holographic icosahedron
     const geometry = new THREE.IcosahedronGeometry(1, 4)
     
-    // Create animated material with color changes
-    this.animatedMaterial = new THREE.MeshStandardMaterial({
-      color: 0x00ff88,
-      metalness: 0.3,
-      roughness: 0.7
-    })
+    // Add random attributes for holographic effect
+    const positionAttribute = geometry.getAttribute('position')
+    const randomValues = new Float32Array(positionAttribute.count)
     
-    const animatedMesh = new THREE.Mesh(geometry, this.animatedMaterial)
+    for (let i = 0; i < randomValues.length; i++) {
+      randomValues[i] = Math.random()
+    }
+    
+    geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
+    
+    // Create holographic shader material
+    const holographicMaterial = new THREE.ShaderMaterial({
+      vertexShader: `
+        uniform float uTime;
+        uniform float uAmplitude;
+        attribute float aRandom;
+
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        varying float vRandom;
+        varying float vHolo;
+        varying vec3 vNormal;
+
+        void main() {
+            vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+            
+            // Create holographic distortion
+            float distortion = sin(modelPosition.x * 3.0 + uTime * 2.0) * sin(modelPosition.y * 4.0 + uTime * 1.5) * sin(modelPosition.z * 2.5 + uTime * 1.8);
+            
+            // Apply distortion along normals
+            vec3 displaced = modelPosition.xyz + normal * distortion * uAmplitude * 0.2;
+            modelPosition = vec4(displaced, 1.0);
+            
+            // Create scanning lines effect
+            float scanLines = sin(modelPosition.y * 20.0 + uTime * 10.0) * 0.05;
+            modelPosition.y += scanLines;
+            
+            // Add holographic flickering
+            float flicker = sin(uTime * 15.0 + aRandom * 10.0) * 0.02 + 1.0;
+            modelPosition.xyz *= flicker;
+            
+            // Create edge glow displacement
+            float edgeGlow = sin(uTime * 3.0) * 0.5 + 0.5;
+            modelPosition.xyz += normal * edgeGlow * uAmplitude * 0.1;
+            
+            // Store hologram value for fragment shader
+            vHolo = distortion * 0.5 + 0.5;
+            vNormal = normal;
+            
+            vec4 viewPosition = viewMatrix * modelPosition;
+            vec4 projectedPosition = projectionMatrix * viewPosition;
+            
+            gl_Position = projectedPosition;
+            
+            vUv = uv;
+            vPosition = modelPosition.xyz;
+            vRandom = aRandom;
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform vec3 uColorA;
+        uniform vec3 uColorB;
+
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        varying float vRandom;
+        varying float vHolo;
+        varying vec3 vNormal;
+
+        void main() {
+            // Create iridescent color shift
+            float iridescence = sin(vHolo * 6.28 + uTime) * 0.5 + 0.5;
+            
+            // Add fresnel-like effect
+            float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0.0, 0.0, 1.0))), 2.0);
+            
+            // Create holographic colors (iridescent spectrum)
+            vec3 holoColor1 = vec3(1.0, 0.2, 0.8); // Magenta
+            vec3 holoColor2 = vec3(0.2, 1.0, 0.8); // Cyan
+            vec3 holoColor3 = vec3(0.8, 1.0, 0.2); // Yellow-green
+            vec3 holoColor4 = vec3(0.8, 0.2, 1.0); // Purple
+            
+            // Multi-step color mixing for iridescence
+            vec3 color1 = mix(holoColor1, holoColor2, iridescence);
+            vec3 color2 = mix(holoColor3, holoColor4, 1.0 - iridescence);
+            vec3 finalColor = mix(color1, color2, sin(uTime * 0.8 + vHolo * 4.0) * 0.5 + 0.5);
+            
+            // Apply fresnel effect
+            finalColor = mix(finalColor * 0.3, finalColor, fresnel);
+            
+            // Add scanning lines
+            float scanLines = sin(vUv.y * 100.0 + uTime * 20.0) * 0.1 + 0.9;
+            finalColor *= scanLines;
+            
+            // Add holographic interference
+            float interference = sin(vUv.x * 50.0 + uTime * 8.0) * sin(vUv.y * 30.0 + uTime * 6.0) * 0.1 + 0.9;
+            finalColor *= interference;
+            
+            // Add transparency with edge glow
+            float alpha = fresnel * 0.7 + 0.3;
+            
+            // Add flickering effect
+            float flicker = sin(uTime * 12.0 + vRandom * 20.0) * 0.1 + 0.9;
+            finalColor *= flicker;
+            
+            gl_FragColor = vec4(finalColor, alpha);
+        }
+      `,
+      uniforms: {
+        uTime: { value: 0 },
+        uAmplitude: { value: 0.15 },
+        uColorA: { value: new THREE.Color(0x00ff88) },
+        uColorB: { value: new THREE.Color(0xff8800) }
+      },
+      side: THREE.DoubleSide,
+      transparent: true,
+      blending: THREE.AdditiveBlending
+    })
+
+    const animatedMesh = new THREE.Mesh(geometry, holographicMaterial)
     animatedMesh.position.set(6, 0, 0)
-    animatedMesh.castShadow = true
-    animatedMesh.receiveShadow = true
+    animatedMesh.userData = { id: 'hologram', type: 'hologram', material: holographicMaterial }
     this.scene.add(animatedMesh)
     
+    // Store reference for uniform updates
+    this.animatedMaterial = holographicMaterial as any
+
     // Animate the mesh position and rotation
     const meshAnimation = this.animationSystem.createAnimation(animatedMesh, {
       duration: 4000,
@@ -816,24 +1341,17 @@ class IntegratedThreeJSApp {
       rotation: new THREE.Euler(0, Math.PI, 0)
     }).start()
     this.animationSystem.addAnimation(meshAnimation)
-    
-    // Animate material color (simulating TSL color animation)
-    const colorAnimation = this.animationSystem.createAnimation(animatedMesh, {
-      duration: 3000,
-      easing: Easing.easeInOutQuad,
-      loop: true,
-      yoyo: true,
-      onUpdate: (progress) => {
-        if (this.animatedMaterial) {
-          // Interpolate between two colors
-          const colorA = new THREE.Color(0x00ff88)
-          const colorB = new THREE.Color(0xff8800)
-          this.animatedMaterial.color.lerpColors(colorA, colorB, progress)
-        }
-      }
+
+    // Additional rotation animation for holographic effect
+    const rotationAnimation = this.animationSystem.createAnimation(animatedMesh, {
+      duration: 6000,
+      easing: Easing.linear,
+      loop: true
     })
-    colorAnimation.start()
-    this.animationSystem.addAnimation(colorAnimation)
+    rotationAnimation.to({ 
+      rotation: new THREE.Euler(Math.PI * 2, Math.PI * 2, Math.PI * 2)
+    }).start()
+    this.animationSystem.addAnimation(rotationAnimation)
   }
 
   private setupEventListeners(): void {
@@ -927,10 +1445,28 @@ class IntegratedThreeJSApp {
       // Update animation system
       this.animationSystem.update(currentTime)
       
-      // Update TSL material properties
-      if (this.shaderMaterial) {
-        // Animate metalness property as a TSL-inspired effect
-        this.shaderMaterial.metalness = Math.sin(currentTime * 0.001) * 0.3 + 0.2
+      // Update shader material uniforms
+      if (this.shaderMaterial && this.shaderMaterial instanceof THREE.ShaderMaterial) {
+        this.shaderMaterial.uniforms.uTime.value = currentTime * 0.001
+        // Add subtle amplitude variation
+        this.shaderMaterial.uniforms.uAmplitude.value = 0.2 + Math.sin(currentTime * 0.0005) * 0.1
+      }
+      
+      // Update animated objects with shader materials
+      this.animatedObjects.forEach((object) => {
+        const mesh = object as THREE.Mesh
+        if (mesh.material instanceof THREE.ShaderMaterial) {
+          mesh.material.uniforms.uTime.value = currentTime * 0.001
+          // Add slight variation to each object's amplitude
+          const variation = Math.sin(currentTime * 0.0003 + object.position.x) * 0.05
+          mesh.material.uniforms.uAmplitude.value = 0.2 + variation
+        }
+      })
+      
+      // Update holographic material
+      if (this.animatedMaterial && this.animatedMaterial instanceof THREE.ShaderMaterial) {
+        this.animatedMaterial.uniforms.uTime.value = currentTime * 0.001
+        this.animatedMaterial.uniforms.uAmplitude.value = 0.15 + Math.sin(currentTime * 0.0008) * 0.05
       }
 
       // Update sky system for automatic day/night cycle
@@ -972,8 +1508,8 @@ const rendererConfig: RendererConfig = {
 }
 
 const sceneConfig: SceneConfig = {
-  backgroundColor: new THREE.Color(0x222222),
-  fog: new THREE.Fog(0x222222, 50, 200)
+  backgroundColor: new THREE.Color(0x333333), // Slightly brighter background
+  fog: new THREE.Fog(0x333333, 50, 200)
 }
 
 // Initialize the integrated app
@@ -989,7 +1525,7 @@ const app = new IntegratedThreeJSApp(
 
 // Print instructions
 console.log(`
-🚀 Three.js TypeScript Application Loaded!
+🚀 Three.js TypeScript Application with Unique Shaders Loaded!
 
 🎮 Controls:
 - Mouse/Touch: Rotate camera
@@ -999,20 +1535,29 @@ console.log(`
 - Ctrl/Cmd + D: Toggle debug mode
 - P: Print performance stats
 
+🎨 Unique Shader Materials:
+- LEFT PLANE: Enhanced Wave Shader with multi-frequency waves and complex color mixing
+- BOX: Noise/Fire Shader with procedural displacement and flickering fire colors
+- SPHERE: Spiral/Ocean Shader with twisting geometry and ocean-like shimmer effects
+- CONE: Pulse/Plasma Shader with electric pulsing and arc lighting effects
+- CYLINDER: Crystal Shader with faceted geometry and golden amber crystalline effects
+- ICOSAHEDRON: Holographic Shader with iridescent colors and scanning line effects
+
 🐛 Debug Mode:
 - Add #debug to URL or press Ctrl/Cmd + D
-- Shows: Stats monitor, GUI controls, scene helpers
+- Shows: Stats monitor, GUI controls for shader parameters, scene helpers
 - Remove #debug to hide all debug elements
 
-🎨 Features Demonstrated:
-- TypeScript type safety & advanced features
-- Animation system with easing functions
-- TSL shader integration (left plane)
-- Animated materials with color interpolation (right icosahedron)
-- Device detection & responsive controls
-- LOD system concepts
-- Debug system with URL hash control
+✨ Features Demonstrated:
+- TypeScript type safety & advanced patterns
+- Modular shader architecture with unique effects per mesh
+- Custom GLSL vertex and fragment shaders
+- Real-time uniform updates and animations
+- Advanced material effects (noise, spirals, pulses, crystals, holograms)
+- Responsive device detection & controls
+- Comprehensive debug system with shader parameter control
 
+Each mesh has its own unique visual identity and animation pattern!
 Check the browser console for interaction feedback!
 `)
 
