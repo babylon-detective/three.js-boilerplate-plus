@@ -60,6 +60,218 @@ class ShaderLoader {
 }
 
 // ============================================================================
+// OCEAN LOD SYSTEM
+// ============================================================================
+
+interface OceanLODLevel {
+  geometry: THREE.PlaneGeometry
+  material: THREE.ShaderMaterial
+  mesh: THREE.Mesh
+  distance: number
+  size: number
+  segments: number
+}
+
+class OceanLODSystem {
+  private lodLevels: OceanLODLevel[] = []
+  private camera: THREE.Camera
+  private scene: THREE.Scene
+  private oceanUniforms: { [key: string]: { value: any } }
+
+  constructor(camera: THREE.Camera, scene: THREE.Scene) {
+    this.camera = camera
+    this.scene = scene
+    this.oceanUniforms = {
+      uTime: { value: 0 },
+      uAmplitude: { value: 0.5 },
+      uWindDirection: { value: new THREE.Vector2(1, 0.5) },
+      uWindStrength: { value: 1.0 },
+      uWaveLength: { value: 2.0 },
+      uWaveSpeed: { value: 1.0 },
+      uWaterColor: { value: new THREE.Color(0x006994) },
+      uDeepWaterColor: { value: new THREE.Color(0x003366) },
+      uFoamColor: { value: new THREE.Color(0xffffff) },
+      uTransparency: { value: 0.8 },
+      uReflectionStrength: { value: 0.6 },
+      uSunDirection: { value: new THREE.Vector3(0.5, 0.8, 0.2) },
+      uSunColor: { value: new THREE.Color(0xffffff) }
+    }
+  }
+
+  public async createLODLevels(oceanShaders: { vertex: string; fragment: string }): Promise<void> {
+    // Define LOD levels (closer = higher detail) - overlapping sizes prevent gaps
+    const lodConfigs = [
+      { distance: 0, size: 150, segments: 256 },    // Very close - highest detail
+      { distance: 50, size: 300, segments: 128 },   // Close - high detail
+      { distance: 150, size: 600, segments: 64 },   // Medium - medium detail
+      { distance: 300, size: 1200, segments: 32 },  // Far - low detail
+      { distance: 600, size: 2400, segments: 16 }   // Very far - lowest detail
+    ]
+
+    for (let i = 0; i < lodConfigs.length; i++) {
+      const config = lodConfigs[i]
+      
+      // Create geometry with appropriate detail level  
+      const geometry = new THREE.PlaneGeometry(config.size, config.size, config.segments, config.segments)
+      geometry.rotateX(-Math.PI / 2) // Rotate to make it horizontal (X-Z plane) - CRITICAL for ocean shader
+
+      // Add random attributes
+      const positionAttribute = geometry.getAttribute('position')
+      const randomValues = new Float32Array(positionAttribute.count)
+      for (let j = 0; j < randomValues.length; j++) {
+        randomValues[j] = Math.random()
+      }
+      geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
+
+      // Create material with shared uniforms - ensure proper rendering from all angles
+      const material = new THREE.ShaderMaterial({
+        vertexShader: oceanShaders.vertex,
+        fragmentShader: oceanShaders.fragment,
+        uniforms: this.oceanUniforms,
+        transparent: true,
+        side: THREE.DoubleSide, // Render both sides to prevent disappearing
+        blending: THREE.NormalBlending,
+        depthWrite: false, // Improve transparency rendering
+        depthTest: true
+      })
+
+      // Create mesh
+      const mesh = new THREE.Mesh(geometry, material)
+      mesh.position.set(0, -2, 0) // Position ocean as horizontal ground plane
+      mesh.userData = { 
+        id: `ocean-lod-${i}`, 
+        type: 'ocean', 
+        lodLevel: i,
+        distance: config.distance,
+        size: config.size 
+      }
+
+      // Add to scene
+      this.scene.add(mesh)
+
+      // Store LOD level
+      this.lodLevels.push({
+        geometry,
+        material,
+        mesh,
+        distance: config.distance,
+        size: config.size,
+        segments: config.segments
+      })
+    }
+
+    console.log(`🌊 Ocean LOD System created with ${this.lodLevels.length} levels`)
+  }
+
+  public update(time: number): void {
+    // Update time uniform for all levels
+    this.oceanUniforms.uTime.value = time * 0.001
+
+    const cameraPosition = this.camera.position
+    const cameraRotation = this.camera.rotation
+    
+    for (let i = 0; i < this.lodLevels.length; i++) {
+      const level = this.lodLevels[i]
+      
+      // Less aggressive positioning - only update when camera moves significantly
+      const currentPos = level.mesh.position
+      const deltaX = Math.abs(cameraPosition.x - currentPos.x)
+      const deltaZ = Math.abs(cameraPosition.z - currentPos.z)
+      
+      // Only reposition if camera has moved more than 1/4 of the plane size
+      if (deltaX > level.size * 0.25 || deltaZ > level.size * 0.25) {
+        const cameraX = Math.floor(cameraPosition.x / (level.size * 0.5)) * (level.size * 0.5)
+        const cameraZ = Math.floor(cameraPosition.z / (level.size * 0.5)) * (level.size * 0.5)
+        level.mesh.position.x = cameraX
+        level.mesh.position.z = cameraZ
+      }
+      
+      // Keep ocean at consistent level below the garden
+      const baseOceanLevel = -2
+      const heightOffset = Math.max(0, cameraPosition.y - 10) * 0.1
+      level.mesh.position.y = baseOceanLevel - heightOffset
+      
+      // DO NOT override rotation - geometry is already rotated correctly
+      // The ocean geometry is pre-rotated, additional rotation causes conflicts
+      
+      // Calculate distance for LOD on X-Z plane (horizontal)
+      const distance = cameraPosition.distanceTo(level.mesh.position)
+      const horizontalDistance = Math.sqrt(
+        Math.pow(cameraPosition.x - level.mesh.position.x, 2) + 
+        Math.pow(cameraPosition.z - level.mesh.position.z, 2)
+      )
+      
+      // Improved LOD visibility with better ranges (horizontal ground plane)
+      let shouldBeVisible = false
+      
+      if (i === 0) {
+        // Highest detail - close range
+        shouldBeVisible = horizontalDistance < 100
+      } else if (i === 1) {
+        // High detail
+        shouldBeVisible = horizontalDistance >= 50 && horizontalDistance < 250
+      } else if (i === 2) {
+        // Medium detail
+        shouldBeVisible = horizontalDistance >= 150 && horizontalDistance < 600
+      } else if (i === 3) {
+        // Low detail
+        shouldBeVisible = horizontalDistance >= 400 && horizontalDistance < 1500
+      } else {
+        // Lowest detail - far range
+        shouldBeVisible = horizontalDistance >= 1000
+      }
+      
+      // Override: always show at least the lowest detail level for infinite ocean effect
+      if (i === this.lodLevels.length - 1) {
+        const anyOtherVisible = this.lodLevels.some((otherLevel, otherIndex) => 
+          otherIndex !== i && otherLevel.mesh.visible
+        )
+        if (!anyOtherVisible) {
+          shouldBeVisible = true
+        }
+      }
+      
+      level.mesh.visible = shouldBeVisible
+    }
+  }
+
+  public setWaveAmplitude(amplitude: number): void {
+    this.oceanUniforms.uAmplitude.value = amplitude
+  }
+
+  public setWindDirection(x: number, z: number): void {
+    this.oceanUniforms.uWindDirection.value.set(x, z)
+  }
+
+  public setWindStrength(strength: number): void {
+    this.oceanUniforms.uWindStrength.value = strength
+  }
+
+  public setWaterColors(shallow: THREE.Color, deep: THREE.Color): void {
+    this.oceanUniforms.uWaterColor.value.copy(shallow)
+    this.oceanUniforms.uDeepWaterColor.value.copy(deep)
+  }
+
+  public getLODLevels(): OceanLODLevel[] {
+    return this.lodLevels
+  }
+
+  public resetOceanPositions(): void {
+    // Reset all ocean planes to default positions on X-Z plane (horizontal ground) - useful for debugging
+    const cameraPosition = this.camera.position
+    for (let i = 0; i < this.lodLevels.length; i++) {
+      const level = this.lodLevels[i]
+      level.mesh.position.set(
+        Math.floor(cameraPosition.x / level.size) * level.size,
+        -2, // Fixed Y position (below ground)
+        Math.floor(cameraPosition.z / level.size) * level.size
+      )
+      level.mesh.rotation.set(0, 0, 0) // Don't override - geometry is pre-rotated
+    }
+  }
+}
+
+// ============================================================================
 // TYPESCRIPT INTERFACES & TYPES
 // ============================================================================
 
@@ -291,6 +503,7 @@ class IntegratedThreeJSApp {
   
   // Systems
   private animationSystem: AnimationSystem
+  private oceanLODSystem: OceanLODSystem | null = null
   private deviceType: DeviceType
   private inputMethods: InputMethod[]
   
@@ -420,14 +633,22 @@ class IntegratedThreeJSApp {
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.05
     
-    // Adjust controls based on device
+    // Adjust controls based on device - less sensitive for ocean viewing
     if (this.inputMethods.includes('touch')) {
-      this.controls.rotateSpeed = 0.8
-      this.controls.zoomSpeed = 1.2
-    } else {
-      this.controls.rotateSpeed = 0.3
+      this.controls.rotateSpeed = 0.5
       this.controls.zoomSpeed = 0.8
+    } else {
+      this.controls.rotateSpeed = 0.2
+      this.controls.zoomSpeed = 0.5
     }
+    
+    // Limit extreme rotations that can cause ocean clipping
+    this.controls.maxPolarAngle = Math.PI * 0.95 // Prevent going too far under
+    this.controls.minPolarAngle = Math.PI * 0.05 // Prevent going too far over
+    
+    // Set reasonable zoom limits for ocean viewing
+    this.controls.minDistance = 2
+    this.controls.maxDistance = 1000
   }
 
   private initDebugSystem(): void {
@@ -580,6 +801,51 @@ class IntegratedThreeJSApp {
 
         skyFolder.open()
       }
+
+      // Ocean controls
+      if (this.oceanLODSystem) {
+        const oceanFolder = gui.addFolder('Ocean System')
+        const oceanLevels = this.oceanLODSystem.getLODLevels()
+        
+        if (oceanLevels.length > 0) {
+          const oceanUniforms = oceanLevels[0].material.uniforms
+          
+          oceanFolder.add(oceanUniforms.uAmplitude, 'value', 0, 2, 0.1).name('Wave Amplitude')
+          oceanFolder.add(oceanUniforms.uWaveSpeed, 'value', 0.1, 3, 0.1).name('Wave Speed')
+          oceanFolder.add(oceanUniforms.uWindStrength, 'value', 0, 3, 0.1).name('Wind Strength')
+          oceanFolder.add(oceanUniforms.uWindDirection.value, 'x', -1, 1, 0.1).name('Wind Dir X')
+          oceanFolder.add(oceanUniforms.uWindDirection.value, 'y', -1, 1, 0.1).name('Wind Dir Z')
+          oceanFolder.add(oceanUniforms.uTransparency, 'value', 0, 1, 0.01).name('Transparency')
+          oceanFolder.add(oceanUniforms.uReflectionStrength, 'value', 0, 1, 0.01).name('Reflection')
+          oceanFolder.addColor(oceanUniforms.uWaterColor, 'value').name('Shallow Water')
+          oceanFolder.addColor(oceanUniforms.uDeepWaterColor, 'value').name('Deep Water')
+          
+          // LOD info
+          const lodInfo = { 'Visible Levels': '0' }
+          oceanFolder.add(lodInfo, 'Visible Levels').name('LOD Info').listen()
+          
+          // Ocean controls
+          const oceanControls = {
+            'Reset Positions': () => {
+              if (this.oceanLODSystem) {
+                this.oceanLODSystem.resetOceanPositions()
+                console.log('🌊 Ocean positions reset')
+              }
+            }
+          }
+          oceanFolder.add(oceanControls, 'Reset Positions').name('Reset Ocean')
+          
+          // Update LOD info in animation loop
+          setInterval(() => {
+            const visibleLevels = oceanLevels
+              .map((level, index) => level.mesh.visible ? index : -1)
+              .filter(index => index !== -1)
+            lodInfo['Visible Levels'] = `${visibleLevels.length} (${visibleLevels.join(',')})`
+          }, 500)
+        }
+        
+        oceanFolder.open()
+      }
   }
 
   private addHelpers(): void {
@@ -609,6 +875,7 @@ class IntegratedThreeJSApp {
   private async createContent(): Promise<void> {
     this.addLighting()
     this.createSkySystem()
+    await this.createOceanSystem()
     await this.createAnimatedObjects()
     await this.createShaderObjects()
     await this.createTSLObjects()
@@ -701,6 +968,49 @@ class IntegratedThreeJSApp {
     skyUniforms['rayleigh'].value = this.skyConfig.rayleigh
     skyUniforms['mieCoefficient'].value = this.skyConfig.mieCoefficient
     skyUniforms['mieDirectionalG'].value = this.skyConfig.mieDirectionalG
+  }
+
+  private async createOceanSystem(): Promise<void> {
+    try {
+      // Load ocean shaders
+      const { vertex: oceanVertexShader, fragment: oceanFragmentShader } = await ShaderLoader.loadShaderPair({
+        vertexPath: 'src/shaders/ocean-vertex.glsl',
+        fragmentPath: 'src/shaders/ocean-fragment.glsl'
+      })
+
+      // Initialize Ocean LOD System
+      this.oceanLODSystem = new OceanLODSystem(this.camera, this.scene)
+      
+      // Create LOD levels with loaded shaders
+      await this.oceanLODSystem.createLODLevels({
+        vertex: oceanVertexShader,
+        fragment: oceanFragmentShader
+      })
+
+      console.log('🌊 Ocean LOD system initialized successfully!')
+
+    } catch (error) {
+      console.error('❌ Failed to create ocean system:', error)
+      
+      // Fallback: create a simple water plane
+      const geometry = new THREE.PlaneGeometry(200, 200, 64, 64)
+      geometry.rotateX(-Math.PI / 2)
+      
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x006994,
+        transparent: true,
+        opacity: 0.8,
+        roughness: 0.1,
+        metalness: 0.1
+      })
+      
+      const waterMesh = new THREE.Mesh(geometry, material)
+      waterMesh.position.set(0, -2, 0)
+      waterMesh.userData = { id: 'fallback-water', type: 'water' }
+      this.scene.add(waterMesh)
+      
+      console.log('🌊 Fallback water plane created')
+    }
   }
 
   private async createAnimatedObjects(): Promise<void> {
@@ -1093,6 +1403,11 @@ class IntegratedThreeJSApp {
         this.animatedMaterial.uniforms.uAmplitude.value = 0.15 + Math.sin(currentTime * 0.0008) * 0.05
       }
 
+      // Update ocean LOD system
+      if (this.oceanLODSystem) {
+        this.oceanLODSystem.update(currentTime)
+      }
+
       // Update sky system for automatic day/night cycle
       if (this.sky) {
         // Animate sun elevation for day/night cycle (slow rotation)
@@ -1122,8 +1437,8 @@ const cameraConfig: CameraConfig = {
   fov: 75,
   aspect: window.innerWidth / window.innerHeight,
   near: 0.1,
-  far: 1000,
-  position: new THREE.Vector3(0, 0, 5)
+  far: 5000, // Increased for ocean LOD system
+  position: new THREE.Vector3(0, 5, 5) // Start higher to see ocean better
 }
 
 const rendererConfig: RendererConfig = {
@@ -1149,7 +1464,7 @@ const app = new IntegratedThreeJSApp(
 
 // Print instructions
 console.log(`
-🚀 Three.js TypeScript Application with Unique Shaders Loaded!
+🚀 Three.js Garden with Ocean - Advanced Shader Showcase Loaded!
 
 🎮 Controls:
 - Mouse/Touch: Rotate camera
@@ -1167,22 +1482,32 @@ console.log(`
 - CYLINDER: Crystal Shader with faceted geometry and golden amber crystalline effects
 - ICOSAHEDRON: Holographic Shader with iridescent colors and scanning line effects
 
+🌊 Ocean LOD System:
+- 5-Level LOD system for infinite ocean rendering
+- Realistic water with waves, foam, reflections, and caustics
+- Dynamic wind simulation and wave amplitude control
+- Automatic camera-following for seamless infinite ocean
+- Performance-optimized with distance-based LOD switching
+
 🐛 Debug Mode:
 - Add #debug to URL or press Ctrl/Cmd + D
-- Shows: Stats monitor, GUI controls for shader parameters, scene helpers
+- Shows: Stats monitor, GUI controls for all shader parameters
+- Ocean controls: Wave amplitude, wind direction/strength, water colors
+- LOD info: Real-time visible level count
 - Remove #debug to hide all debug elements
 
 ✨ Features Demonstrated:
 - TypeScript type safety & advanced patterns
 - Modular shader architecture with unique effects per mesh
-- Custom GLSL vertex and fragment shaders
+- LOD-based infinite ocean with realistic water simulation
+- Custom GLSL vertex and fragment shaders for water
 - Real-time uniform updates and animations
-- Advanced material effects (noise, spirals, pulses, crystals, holograms)
+- Advanced material effects (water, waves, foam, reflections)
 - Responsive device detection & controls
-- Comprehensive debug system with shader parameter control
+- Comprehensive debug system with ocean parameter control
 
-Each mesh has its own unique visual identity and animation pattern!
-Check the browser console for interaction feedback!
+🌿 Garden by the Sea - Each mesh has unique identity + infinite ocean horizon!
+Fly around to see the LOD system in action!
 `)
 
 // Export types for potential module usage
