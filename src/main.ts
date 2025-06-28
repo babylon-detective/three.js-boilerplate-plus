@@ -99,13 +99,11 @@ class OceanLODSystem {
   }
 
   public async createLODLevels(oceanShaders: { vertex: string; fragment: string }): Promise<void> {
-    // Define LOD levels (closer = higher detail) - overlapping sizes prevent gaps
+    // Simplified LOD system with only 3 levels for smoother transitions
     const lodConfigs = [
-      { distance: 0, size: 150, segments: 256 },    // Very close - highest detail
-      { distance: 50, size: 300, segments: 128 },   // Close - high detail
-      { distance: 150, size: 600, segments: 64 },   // Medium - medium detail
-      { distance: 300, size: 1200, segments: 32 },  // Far - low detail
-      { distance: 600, size: 2400, segments: 16 }   // Very far - lowest detail
+      { distance: 0, size: 300, segments: 128 },    // Close - high detail
+      { distance: 200, size: 800, segments: 64 },   // Medium - medium detail  
+      { distance: 800, size: 2000, segments: 32 }   // Far - low detail (large coverage)
     ]
 
     for (let i = 0; i < lodConfigs.length; i++) {
@@ -113,9 +111,9 @@ class OceanLODSystem {
       
       // Create geometry with appropriate detail level  
       const geometry = new THREE.PlaneGeometry(config.size, config.size, config.segments, config.segments)
-      geometry.rotateX(-Math.PI / 2) // Rotate to make it horizontal (X-Z plane) - CRITICAL for ocean shader
+      geometry.rotateX(-Math.PI / 2) // Rotate to make it horizontal (X-Z plane)
 
-      // Add random attributes
+      // Add random attributes for wave variation
       const positionAttribute = geometry.getAttribute('position')
       const randomValues = new Float32Array(positionAttribute.count)
       for (let j = 0; j < randomValues.length; j++) {
@@ -123,21 +121,21 @@ class OceanLODSystem {
       }
       geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
 
-      // Create material with shared uniforms - ensure proper rendering from all angles
+      // Create material with shared uniforms
       const material = new THREE.ShaderMaterial({
         vertexShader: oceanShaders.vertex,
         fragmentShader: oceanShaders.fragment,
         uniforms: this.oceanUniforms,
         transparent: true,
-        side: THREE.DoubleSide, // Render both sides to prevent disappearing
+        side: THREE.DoubleSide,
         blending: THREE.NormalBlending,
-        depthWrite: false, // Improve transparency rendering
+        depthWrite: false,
         depthTest: true
       })
 
       // Create mesh
       const mesh = new THREE.Mesh(geometry, material)
-      mesh.position.set(0, -2, 0) // Position ocean as horizontal ground plane
+      mesh.position.set(0, -2, 0) // Fixed position at origin
       mesh.userData = { 
         id: `ocean-lod-${i}`, 
         type: 'ocean', 
@@ -160,7 +158,7 @@ class OceanLODSystem {
       })
     }
 
-    console.log(`🌊 Ocean LOD System created with ${this.lodLevels.length} levels`)
+    console.log(`🌊 Simplified Ocean LOD System created with ${this.lodLevels.length} levels`)
   }
 
   public update(time: number): void {
@@ -168,70 +166,43 @@ class OceanLODSystem {
     this.oceanUniforms.uTime.value = time * 0.001
 
     const cameraPosition = this.camera.position
-    const cameraRotation = this.camera.rotation
+    
+    // Calculate camera distance from origin for zoom-based decisions
+    const cameraDistance = Math.sqrt(
+      cameraPosition.x * cameraPosition.x + 
+      cameraPosition.z * cameraPosition.z
+    )
+    
+    // Determine which single LOD level to show based on camera distance
+    let activeLODIndex = 0
+    
+    if (cameraDistance < 150) {
+      activeLODIndex = 0 // Close: high detail
+    } else if (cameraDistance < 600) {
+      activeLODIndex = 1 // Medium: medium detail
+    } else {
+      activeLODIndex = 2 // Far: low detail
+    }
     
     for (let i = 0; i < this.lodLevels.length; i++) {
       const level = this.lodLevels[i]
       
-      // Less aggressive positioning - only update when camera moves significantly
-      const currentPos = level.mesh.position
-      const deltaX = Math.abs(cameraPosition.x - currentPos.x)
-      const deltaZ = Math.abs(cameraPosition.z - currentPos.z)
+      // Only the active LOD level is visible - eliminates jumping between levels
+      level.mesh.visible = (i === activeLODIndex)
       
-      // Only reposition if camera has moved more than 1/4 of the plane size
-      if (deltaX > level.size * 0.25 || deltaZ > level.size * 0.25) {
-        const cameraX = Math.floor(cameraPosition.x / (level.size * 0.5)) * (level.size * 0.5)
-        const cameraZ = Math.floor(cameraPosition.z / (level.size * 0.5)) * (level.size * 0.5)
-        level.mesh.position.x = cameraX
-        level.mesh.position.z = cameraZ
-      }
-      
-      // Keep ocean at consistent level below the garden
-      const baseOceanLevel = -2
-      const heightOffset = Math.max(0, cameraPosition.y - 10) * 0.1
-      level.mesh.position.y = baseOceanLevel - heightOffset
-      
-      // DO NOT override rotation - geometry is already rotated correctly
-      // The ocean geometry is pre-rotated, additional rotation causes conflicts
-      
-      // Calculate distance for LOD on X-Z plane (horizontal)
-      const distance = cameraPosition.distanceTo(level.mesh.position)
-      const horizontalDistance = Math.sqrt(
-        Math.pow(cameraPosition.x - level.mesh.position.x, 2) + 
-        Math.pow(cameraPosition.z - level.mesh.position.z, 2)
-      )
-      
-      // Improved LOD visibility with better ranges (horizontal ground plane)
-      let shouldBeVisible = false
-      
-      if (i === 0) {
-        // Highest detail - close range
-        shouldBeVisible = horizontalDistance < 100
-      } else if (i === 1) {
-        // High detail
-        shouldBeVisible = horizontalDistance >= 50 && horizontalDistance < 250
-      } else if (i === 2) {
-        // Medium detail
-        shouldBeVisible = horizontalDistance >= 150 && horizontalDistance < 600
-      } else if (i === 3) {
-        // Low detail
-        shouldBeVisible = horizontalDistance >= 400 && horizontalDistance < 1500
-      } else {
-        // Lowest detail - far range
-        shouldBeVisible = horizontalDistance >= 1000
-      }
-      
-      // Override: always show at least the lowest detail level for infinite ocean effect
-      if (i === this.lodLevels.length - 1) {
-        const anyOtherVisible = this.lodLevels.some((otherLevel, otherIndex) => 
-          otherIndex !== i && otherLevel.mesh.visible
-        )
-        if (!anyOtherVisible) {
-          shouldBeVisible = true
+      if (level.mesh.visible) {
+        // Keep ocean centered at global origin - DO NOT follow camera
+        level.mesh.position.set(0, -2, 0)
+        
+        // For close-up detail, allow slight following to prevent edge visibility
+        if (i === 0 && cameraDistance < 100) {
+          // Only follow camera when very close to prevent seeing edges
+          const followX = Math.max(-50, Math.min(50, cameraPosition.x * 0.3))
+          const followZ = Math.max(-50, Math.min(50, cameraPosition.z * 0.3))
+          level.mesh.position.x = followX
+          level.mesh.position.z = followZ
         }
       }
-      
-      level.mesh.visible = shouldBeVisible
     }
   }
 
@@ -257,16 +228,10 @@ class OceanLODSystem {
   }
 
   public resetOceanPositions(): void {
-    // Reset all ocean planes to default positions on X-Z plane (horizontal ground) - useful for debugging
-    const cameraPosition = this.camera.position
+    // Reset all ocean planes to origin
     for (let i = 0; i < this.lodLevels.length; i++) {
       const level = this.lodLevels[i]
-      level.mesh.position.set(
-        Math.floor(cameraPosition.x / level.size) * level.size,
-        -2, // Fixed Y position (below ground)
-        Math.floor(cameraPosition.z / level.size) * level.size
-      )
-      level.mesh.rotation.set(0, 0, 0) // Don't override - geometry is pre-rotated
+      level.mesh.position.set(0, -2, 0) // Reset to origin
     }
   }
 }
@@ -835,13 +800,50 @@ class IntegratedThreeJSApp {
           }
           oceanFolder.add(oceanControls, 'Reset Positions').name('Reset Ocean')
           
-          // Update LOD info in animation loop
+          // Add debug info for simplified LOD system
+          const debugInfo = {
+            'Camera Distance': 0,
+            'Active LOD Level': 0,
+            'Ocean Position': '(0, -2, 0)',
+            'LOD Thresholds': 'Close: <150, Medium: 150-600, Far: >600'
+          }
+          
+          oceanFolder.add(debugInfo, 'Camera Distance').name('Distance from Origin').listen()
+          oceanFolder.add(debugInfo, 'Active LOD Level').name('Current LOD Level').listen()
+          oceanFolder.add(debugInfo, 'Ocean Position').name('Ocean Center').listen()
+          oceanFolder.add(debugInfo, 'LOD Thresholds').name('LOD Ranges').listen()
+          
+          // Update debug info in animation loop
           setInterval(() => {
-            const visibleLevels = oceanLevels
-              .map((level, index) => level.mesh.visible ? index : -1)
-              .filter(index => index !== -1)
-            lodInfo['Visible Levels'] = `${visibleLevels.length} (${visibleLevels.join(',')})`
-          }, 500)
+            if (this.camera) {
+              const pos = this.camera.position
+              const cameraDistance = Math.sqrt(pos.x * pos.x + pos.z * pos.z)
+              
+              let activeLOD = 0
+              if (cameraDistance < 150) {
+                activeLOD = 0 // Close
+              } else if (cameraDistance < 600) {
+                activeLOD = 1 // Medium
+              } else {
+                activeLOD = 2 // Far
+              }
+              
+              debugInfo['Camera Distance'] = Math.round(cameraDistance)
+              debugInfo['Active LOD Level'] = activeLOD
+              
+              // Show ocean position
+              const activeLevel = oceanLevels.find(level => level.mesh.visible)
+              if (activeLevel) {
+                const pos = activeLevel.mesh.position
+                debugInfo['Ocean Position'] = `(${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})`
+              }
+              
+              const visibleLevels = oceanLevels
+                .map((level, index) => level.mesh.visible ? index : -1)
+                .filter(index => index !== -1)
+              lodInfo['Visible Levels'] = `${visibleLevels.length} (${visibleLevels.join(',')})`
+            }
+          }, 200)
         }
         
         oceanFolder.open()
@@ -1436,8 +1438,8 @@ class IntegratedThreeJSApp {
 const cameraConfig: CameraConfig = {
   fov: 75,
   aspect: window.innerWidth / window.innerHeight,
-  near: 0.1,
-  far: 5000, // Increased for ocean LOD system
+  near: 0.1, // Balanced to prevent z-fighting while allowing close viewing
+  far: 15000, // Increased for large ocean LOD system
   position: new THREE.Vector3(0, 5, 5) // Start higher to see ocean better
 }
 
