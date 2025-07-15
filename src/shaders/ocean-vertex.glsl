@@ -130,21 +130,41 @@ void main() {
     foam += smoothstep(0.5, 1.0, abs(sin(worldPos.x * 0.3 + time * 1.5))) * 0.3;
     vFoam = foam;
     
-    // Calculate approximate normal for lighting
+    // Calculate accurate normal by sampling height at neighboring points
     float offset = 0.1;
-    float hL = sin((worldPos.x - offset) * 0.02 + worldPos.z * 0.01 + time * 0.5) * uAmplitude * 2.0;
-    float hR = sin((worldPos.x + offset) * 0.02 + worldPos.z * 0.01 + time * 0.5) * uAmplitude * 2.0;
-    float hD = sin(worldPos.x * 0.02 + (worldPos.z - offset) * 0.01 + time * 0.5) * uAmplitude * 2.0;
-    float hU = sin(worldPos.x * 0.02 + (worldPos.z + offset) * 0.01 + time * 0.5) * uAmplitude * 2.0;
     
+    // Sample height at 4 neighboring points using the same wave calculation
+    vec3 posL = vec3(worldPos.x - offset, 0.0, worldPos.z);
+    vec3 posR = vec3(worldPos.x + offset, 0.0, worldPos.z);
+    vec3 posD = vec3(worldPos.x, 0.0, worldPos.z - offset);
+    vec3 posU = vec3(worldPos.x, 0.0, worldPos.z + offset);
+    
+    // Calculate height at each neighboring point (same wave formula as main calculation)
+    float hL = sin(posL.x * 0.02 + posL.z * 0.01 + time * 0.5) * uAmplitude * 2.0;
+    hL += sin(posL.x * 0.03 + posL.z * 0.02 + time * 0.3) * uAmplitude * 1.5;
+    hL += sin(posL.x * 0.1 + posL.z * 0.05 + time * 1.2) * uAmplitude * 0.8;
+    
+    float hR = sin(posR.x * 0.02 + posR.z * 0.01 + time * 0.5) * uAmplitude * 2.0;
+    hR += sin(posR.x * 0.03 + posR.z * 0.02 + time * 0.3) * uAmplitude * 1.5;
+    hR += sin(posR.x * 0.1 + posR.z * 0.05 + time * 1.2) * uAmplitude * 0.8;
+    
+    float hD = sin(posD.x * 0.02 + posD.z * 0.01 + time * 0.5) * uAmplitude * 2.0;
+    hD += sin(posD.x * 0.03 + posD.z * 0.02 + time * 0.3) * uAmplitude * 1.5;
+    hD += sin(posD.x * 0.1 + posD.z * 0.05 + time * 1.2) * uAmplitude * 0.8;
+    
+    float hU = sin(posU.x * 0.02 + posU.z * 0.01 + time * 0.5) * uAmplitude * 2.0;
+    hU += sin(posU.x * 0.03 + posU.z * 0.02 + time * 0.3) * uAmplitude * 1.5;
+    hU += sin(posU.x * 0.1 + posU.z * 0.05 + time * 1.2) * uAmplitude * 0.8;
+    
+    // Calculate normal from height differences
     vec3 normal = normalize(vec3(hL - hR, 2.0 * offset, hD - hU));
-    vNormal = normal;
+    vNormal = normalMatrix * normal;
     
+    // Transform position
     vec4 viewPosition = viewMatrix * modelPosition;
-    vec4 projectedPosition = projectionMatrix * viewPosition;
+    gl_Position = projectionMatrix * viewPosition;
     
-    gl_Position = projectedPosition;
-    
+    // Set varying values
     vUv = uv;
     vPosition = modelPosition.xyz;
     vWorldPosition = worldPos;

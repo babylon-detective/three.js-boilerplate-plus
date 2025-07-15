@@ -48,10 +48,12 @@ class Animation<T extends THREE.Object3D = THREE.Object3D> {
   private state: AnimationState = AnimationState.IDLE
   private startTime: number = 0
   private pausedTime: number = 0
+  private isActive: boolean = false
   
   constructor(
     target: T,
-    private config: AnimationConfig
+    private config: AnimationConfig,
+    private isLockedFn?: (uuid: string) => boolean
   ) {
     this.target = target
   }
@@ -74,6 +76,7 @@ class Animation<T extends THREE.Object3D = THREE.Object3D> {
   }
 
   public start(): this {
+    this.isActive = true
     this.captureStartValues()
     this.state = AnimationState.PLAYING
     this.startTime = performance.now()
@@ -99,12 +102,16 @@ class Animation<T extends THREE.Object3D = THREE.Object3D> {
 
   public stop(): this {
     this.state = AnimationState.IDLE
+    this.isActive = false
     return this
   }
 
   public update(currentTime: number): boolean {
-    if (this.state !== AnimationState.PLAYING) {
-      return false
+    if (!this.isActive) return false
+
+    // Check if position is locked
+    if (this.isLockedFn && this.isLockedFn(this.target.uuid)) {
+      return true // Keep animation alive but don't update
     }
 
     const elapsed = currentTime - this.startTime - this.config.delay
@@ -125,11 +132,12 @@ class Animation<T extends THREE.Object3D = THREE.Object3D> {
       } else {
         this.state = AnimationState.COMPLETED
         this.config.onComplete?.()
+        this.isActive = false
         return false
       }
     }
 
-    return true
+    return this.isActive
   }
 
   private captureStartValues(): void {
@@ -210,6 +218,8 @@ class Animation<T extends THREE.Object3D = THREE.Object3D> {
         )
       }
     }
+
+    this.currentValues = { ...this.startValues }
   }
 
   private swapStartAndEndValues(): void {
@@ -220,6 +230,10 @@ class Animation<T extends THREE.Object3D = THREE.Object3D> {
 
   public getState(): AnimationState {
     return this.state
+  }
+
+  public isRunning(): boolean {
+    return this.isActive
   }
 }
 
@@ -252,6 +266,11 @@ export const Easing = {
 export class AnimationSystem {
   private animations: Set<Animation> = new Set()
   private isRunning: boolean = false
+  private isLockedFn?: (uuid: string) => boolean
+
+  public setLockedPositionChecker(isLockedFn: (uuid: string) => boolean): void {
+    this.isLockedFn = isLockedFn
+  }
 
   // Generic method for creating animations
   public createAnimation<T extends THREE.Object3D>(
@@ -267,7 +286,7 @@ export class AnimationSystem {
       ...config
     }
 
-    return new Animation(target, fullConfig)
+    return new Animation(target, fullConfig, this.isLockedFn)
   }
 
   public addAnimation(animation: Animation): void {
@@ -281,13 +300,18 @@ export class AnimationSystem {
   public update(currentTime: number): void {
     if (!this.isRunning) return
 
-    // TypeScript's Set iteration
+    const animationsToRemove: Animation<any>[] = []
+    
     for (const animation of this.animations) {
-      const isActive = animation.update(currentTime)
-      if (!isActive && animation.getState() === AnimationState.COMPLETED) {
-        this.animations.delete(animation)
+      if (!animation.update(currentTime)) {
+        animationsToRemove.push(animation)
       }
     }
+
+    // Remove completed animations
+    animationsToRemove.forEach(animation => {
+      this.animations.delete(animation)
+    })
   }
 
   public start(): void {

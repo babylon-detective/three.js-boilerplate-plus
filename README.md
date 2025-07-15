@@ -1,6 +1,6 @@
 # Three.js-Boilerplate-TS-Vite
 
-A Three.js Boilerplate for TypeScript Vite projects.
+A Three.js Boilerplate for TypeScript Vite projects with advanced features including ocean LOD system, collision detection, player movement, and comprehensive debugging tools.
 
 This boilerplate is supplementary to <!--my book titled [**Three.js and TypeScript**](https://amzn.to/3FahROZ) and--> my **ThreeJS and TypeScript** courses at [Udemy](https://www.udemy.com/course/threejs-tutorials/?referralCode=4C7E1DE91C3E42F69D0F) and [YouTube (Channel membership required)](https://www.youtube.com/playlist?list=PLKWUX7aMnlEKTmkBqwjc-tZgULJdNBjEd)
 
@@ -8,9 +8,20 @@ This boilerplate is supplementary to <!--my book titled [**Three.js and TypeScri
 
 [Course Discount Coupons](https://sbcode.net/coupons#threejs)
 
+## 📖 Instructions & Controls
+
+For detailed instructions on how to use this boilerplate, including all controls, console commands, and features, see **[INSTRUCTIONS.md](INSTRUCTIONS.md)**.
+
 ## Boilerplate Overview
 
-When run, the boilerplate shows a multi-coloured wireframe cube, with `OrbitControls`, `Dat.GUI` and `Stats.js` included.
+This enhanced boilerplate includes:
+- **Ocean LOD System**: Infinite ocean with realistic water simulation
+- **Player Movement**: WASD controls with collision detection
+- **Advanced Shaders**: Unique shader materials for each object
+- **Debug System**: Comprehensive debugging tools and GUI
+- **Performance Monitoring**: Real-time performance tracking
+- **Collision System**: Physics-based collision detection
+- **Camera Management**: System and player camera modes
 
 [Example](https://sean-bradley.github.io/Three.js-Boilerplate-TS-Vite/)
 

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Collision System Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .test-panel {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 1000;
+        }
+        button {
+            background: #4a90e2;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #357abd;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-panel">
+        <h3>🧪 Collision System Test</h3>
+        <button onclick="testCollisionAtOrigin()">Test Origin Collision</button>
+        <button onclick="testPlayerCollision()">Test Player Collision</button>
+        <button onclick="showLandMeshes()">Show Land Meshes</button>
+        <button onclick="getCollisionStatus()">Get Collision Status</button>
+        <button onclick="testPlayerMovement()">Test Player Movement</button>
+        <div class="status" id="status">Ready to test collision system...</div>
+    </div>
+
+    <script>
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+            console.log(message);
+        }
+
+        function testCollisionAtOrigin() {
+            updateStatus('Testing collision at origin (0, 10, 0)...');
+            if (window.threeJSApp) {
+                window.threeJSApp.testCollisionAtPosition(0, 10, 0);
+            } else {
+                updateStatus('❌ App not available');
+            }
+        }
+
+        function testPlayerCollision() {
+            updateStatus('Testing player collision...');
+            if (window.testPlayerCollision) {
+                window.testPlayerCollision();
+            } else {
+                updateStatus('❌ Player collision test not available');
+            }
+        }
+
+        function showLandMeshes() {
+            updateStatus('Showing land meshes...');
+            if (window.showLandMeshes) {
+                window.showLandMeshes();
+            } else {
+                updateStatus('❌ Show land meshes not available');
+            }
+        }
+
+        function getCollisionStatus() {
+            updateStatus('Getting collision status...');
+            if (window.getCollisionStatus) {
+                window.getCollisionStatus();
+            } else {
+                updateStatus('❌ Get collision status not available');
+            }
+        }
+
+        function testPlayerMovement() {
+            updateStatus('Testing player movement...');
+            if (window.testPlayerMovement) {
+                window.testPlayerMovement();
+            } else {
+                updateStatus('❌ Player movement test not available');
+            }
+        }
+
+        // Auto-test after page loads
+        setTimeout(() => {
+            updateStatus('Auto-testing collision system...');
+            testCollisionAtOrigin();
+        }, 2000);
+    </script>
+</body>
+</html> 

@@ -1,9 +1,22 @@
 import './style.css'
 import * as THREE from 'three'
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import Stats from 'three/addons/libs/stats.module.js'
-import { GUI } from 'dat.gui'
-import { Sky } from 'three/addons/objects/Sky.js'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import Stats from 'three/examples/jsm/libs/stats.module.js'
+import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js'
+import { Sky } from 'three/examples/jsm/objects/Sky.js'
+import { ObjectManager } from './systems/ObjectManager'
+import { ConfigManager } from './systems/ConfigManager'
+import { ObjectLoader } from './systems/ObjectLoader'
+import { AnimationSystem } from './systems/AnimationSystem'
+import { ConsoleCommands } from './systems/ConsoleCommands'
+import { CollisionSystem } from './systems/CollisionSystem'
+import { CameraManager } from './systems/CameraManager'
+import { PlayerController } from './systems/PlayerController'
+import { ParameterManager } from './systems/ParameterManager'
+import { ParameterGUI } from './systems/ParameterGUI'
+import { logger, LogModule, LogLevel } from './systems/Logger'
+import { performanceMonitor } from './systems/PerformanceMonitor'
+import { DebugGUIManager } from './systems/DebugGUIManager'
 
 // TSL (Three Shader Language) - works with both WebGL and WebGPU!
 import { 
@@ -45,7 +58,7 @@ class ShaderLoader {
       this.cache.set(path, content)
       return content
     } catch (error) {
-      console.error(`Error loading shader ${path}:`, error)
+      logger.error(LogModule.SYSTEM, `Error loading shader ${path}:`, error)
       throw error
     }
   }
@@ -67,9 +80,20 @@ interface OceanLODLevel {
   geometry: THREE.PlaneGeometry
   material: THREE.ShaderMaterial
   mesh: THREE.Mesh
+  shadowMesh: THREE.Mesh
   distance: number
   size: number
   segments: number
+}
+
+interface LandPiece {
+  geometry: THREE.BufferGeometry
+  material: THREE.ShaderMaterial
+  mesh: THREE.Mesh
+  shadowMesh: THREE.Mesh
+  id: string
+  type: 'plane' | 'box' | 'sphere' | 'cylinder' | 'custom'
+  scale: number
 }
 
 class OceanLODSystem {
@@ -94,7 +118,8 @@ class OceanLODSystem {
       uTransparency: { value: 0.8 },
       uReflectionStrength: { value: 0.6 },
       uSunDirection: { value: new THREE.Vector3(0.5, 0.8, 0.2) },
-      uSunColor: { value: new THREE.Color(0xffffff) }
+      uSunColor: { value: new THREE.Color(0xffffff) },
+      uSunIntensity: { value: 1.0 }
     }
   }
 
@@ -129,8 +154,9 @@ class OceanLODSystem {
         transparent: true,
         side: THREE.DoubleSide,
         blending: THREE.NormalBlending,
-        depthWrite: false,
-        depthTest: true
+        depthWrite: true, // Enable depth writing for proper sorting
+        depthTest: true,
+        alphaTest: 0.1 // Discard fully transparent pixels
       })
 
       // Create mesh
@@ -144,6 +170,34 @@ class OceanLODSystem {
         size: config.size 
       }
 
+      // Ocean receives shadows but cannot cast them with custom shaders
+      mesh.receiveShadow = true  // Water receives shadows from land
+      mesh.castShadow = false    // Custom shaders don't support shadow casting
+      
+      // Create invisible shadow-casting plane for this LOD level
+      const shadowGeometry = new THREE.PlaneGeometry(config.size, config.size, 32, 32)
+      shadowGeometry.rotateX(-Math.PI / 2)
+      
+      const shadowMaterial = new THREE.MeshStandardMaterial({
+        transparent: true,
+        opacity: 0, // Invisible
+        color: 0x006994,
+        depthWrite: false // Don't write to depth buffer to avoid interfering with ocean
+      })
+      
+      const shadowMesh = new THREE.Mesh(shadowGeometry, shadowMaterial)
+      shadowMesh.position.set(0, -1.9, 0) // Slightly higher than ocean to avoid Z-fighting
+      shadowMesh.castShadow = true
+      shadowMesh.receiveShadow = false
+      shadowMesh.userData = { 
+        id: `ocean-shadow-${i}`, 
+        type: 'ocean-shadow', 
+        lodLevel: i,
+        visible: false // Mark as helper mesh
+      }
+      
+      this.scene.add(shadowMesh)
+
       // Add to scene
       this.scene.add(mesh)
 
@@ -152,6 +206,7 @@ class OceanLODSystem {
         geometry,
         material,
         mesh,
+        shadowMesh,
         distance: config.distance,
         size: config.size,
         segments: config.segments
@@ -159,6 +214,7 @@ class OceanLODSystem {
     }
 
     console.log(`🌊 Simplified Ocean LOD System created with ${this.lodLevels.length} levels`)
+    console.log('🌊 Ocean shadow settings: receiveShadow=true, invisible shadow casters added')
   }
 
   public update(time: number): void {
@@ -188,11 +244,14 @@ class OceanLODSystem {
       const level = this.lodLevels[i]
       
       // Only the active LOD level is visible - eliminates jumping between levels
-      level.mesh.visible = (i === activeLODIndex)
+      const isActive = (i === activeLODIndex)
+      level.mesh.visible = isActive
+      level.shadowMesh.visible = isActive
       
-      if (level.mesh.visible) {
+      if (isActive) {
         // Keep ocean centered at global origin - DO NOT follow camera
         level.mesh.position.set(0, -2, 0)
+        level.shadowMesh.position.set(0, -1.9, 0)
         
         // For close-up detail, allow slight following to prevent edge visibility
         if (i === 0 && cameraDistance < 100) {
@@ -201,6 +260,7 @@ class OceanLODSystem {
           const followZ = Math.max(-50, Math.min(50, cameraPosition.z * 0.3))
           level.mesh.position.x = followX
           level.mesh.position.z = followZ
+          level.shadowMesh.position.set(followX, -1.9, followZ)
         }
       }
     }
@@ -223,16 +283,307 @@ class OceanLODSystem {
     this.oceanUniforms.uDeepWaterColor.value.copy(deep)
   }
 
+  public setSunDirection(direction: THREE.Vector3): void {
+    this.oceanUniforms.uSunDirection.value.copy(direction)
+  }
+
+  public setSunColor(color: THREE.Color): void {
+    this.oceanUniforms.uSunColor.value.copy(color)
+  }
+
+  public setSunIntensity(intensity: number): void {
+    this.oceanUniforms.uSunIntensity.value = intensity
+  }
+
   public getLODLevels(): OceanLODLevel[] {
     return this.lodLevels
   }
+
+  // Legacy method removed - position locking now handled by ObjectManager
 
   public resetOceanPositions(): void {
     // Reset all ocean planes to origin
     for (let i = 0; i < this.lodLevels.length; i++) {
       const level = this.lodLevels[i]
       level.mesh.position.set(0, -2, 0) // Reset to origin
+      level.shadowMesh.position.set(0, -1.9, 0) // Reset shadow mesh too
     }
+  }
+
+  public setOceanShadowCasting(enabled: boolean): void {
+    for (let i = 0; i < this.lodLevels.length; i++) {
+      this.lodLevels[i].shadowMesh.castShadow = enabled
+    }
+    console.log(`🌊 Ocean shadow casting: ${enabled ? 'enabled' : 'disabled'}`)
+  }
+
+  public setOceanShadowReceiving(enabled: boolean): void {
+    for (let i = 0; i < this.lodLevels.length; i++) {
+      this.lodLevels[i].mesh.receiveShadow = enabled
+    }
+    console.log(`🌊 Ocean shadow receiving: ${enabled ? 'enabled' : 'disabled'}`)
+  }
+}
+
+class LandSystem {
+  private landPieces: LandPiece[] = []
+  private scene: THREE.Scene
+  private landUniforms: { [key: string]: { value: any } }
+
+  constructor(scene: THREE.Scene) {
+    this.scene = scene
+    this.landUniforms = {
+      uTime: { value: 0 },
+      uElevation: { value: 8.0 }, // Increased for more dramatic peaks
+      uRoughness: { value: 1.2 }, // More terrain variation
+      uScale: { value: 0.8 }, // Tighter terrain features
+      uLandColor: { value: new THREE.Color(0x4a7c59) }, // Forest green
+      uRockColor: { value: new THREE.Color(0x8b7355) }, // Rock brown
+      uSandColor: { value: new THREE.Color(0xc2b280) }, // Sandy beige
+      uMoisture: { value: 0.3 }, // Drier for more rocky appearance
+      uSunDirection: { value: new THREE.Vector3(0.5, 0.8, 0.2) },
+      uSunColor: { value: new THREE.Color(1, 1, 0.9) },
+      uSunIntensity: { value: 1.0 },
+      uIslandRadius: { value: 35.0 }, // Smaller for steeper dropoff
+      uCoastSmoothness: { value: 8.0 }, // Sharper coastline
+      uSeaLevel: { value: -4.0 } // Deeper edges
+    }
+  }
+
+  public async createLandPiece(
+    type: 'plane' | 'box' | 'sphere' | 'cylinder' | 'custom',
+    landShaders: { vertex: string; fragment: string },
+    options: {
+      id?: string
+      position?: THREE.Vector3
+      rotation?: THREE.Euler
+      scale?: THREE.Vector3
+      size?: number
+      segments?: number
+      customGeometry?: THREE.BufferGeometry
+    } = {}
+  ): Promise<LandPiece> {
+    const {
+      id = `land-${type}-${Date.now()}`,
+      position = new THREE.Vector3(0, 0, 0),
+      rotation = new THREE.Euler(0, 0, 0),
+      scale = new THREE.Vector3(1, 1, 1),
+      size = 50,
+      segments = 64,
+      customGeometry
+    } = options
+
+    // Create geometry based on type
+    let geometry: THREE.BufferGeometry
+
+    switch (type) {
+      case 'plane':
+        geometry = new THREE.PlaneGeometry(size, size, segments, segments)
+        geometry.rotateX(-Math.PI / 2) // Make horizontal
+        break
+      case 'box':
+        geometry = new THREE.BoxGeometry(size, size * 0.5, size, segments, segments, segments)
+        break
+      case 'sphere':
+        geometry = new THREE.SphereGeometry(size * 0.5, segments, segments)
+        break
+      case 'cylinder':
+        geometry = new THREE.CylinderGeometry(size * 0.5, size * 0.5, size * 0.3, segments, segments)
+        break
+      case 'custom':
+        if (!customGeometry) {
+          throw new Error('Custom geometry required for custom type')
+        }
+        geometry = customGeometry
+        break
+      default:
+        throw new Error(`Unknown land type: ${type}`)
+    }
+
+    // Create material with land shader
+    const material = new THREE.ShaderMaterial({
+      vertexShader: landShaders.vertex,
+      fragmentShader: landShaders.fragment,
+      uniforms: this.landUniforms,
+      side: THREE.DoubleSide,
+      wireframe: false
+    })
+
+    // Create mesh
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.position.copy(position)
+    mesh.rotation.copy(rotation)
+    mesh.scale.copy(scale)
+    mesh.userData = {
+      id,
+      type: 'land',
+      landType: type,
+      scale: scale.x
+    }
+
+    // Land can receive shadows but cannot cast them with custom shaders
+    mesh.castShadow = false    // Custom shaders don't support shadow casting
+    mesh.receiveShadow = true  // Land receives shadows from other objects
+    
+    // Create invisible shadow-casting geometry for proper shadows
+    const shadowGeometry = geometry.clone()
+    const shadowMaterial = new THREE.MeshStandardMaterial({
+      transparent: true,
+      opacity: 0, // Invisible
+      color: 0x8B4513,
+      depthWrite: false // Don't write to depth buffer to avoid interfering with ocean
+    })
+    
+    const shadowMesh = new THREE.Mesh(shadowGeometry, shadowMaterial)
+    shadowMesh.position.copy(position)
+    shadowMesh.rotation.copy(rotation)
+    shadowMesh.scale.copy(scale)
+    shadowMesh.castShadow = true
+    shadowMesh.receiveShadow = false
+    shadowMesh.userData = { 
+      id: `${id}-shadow`, 
+      type: 'land-shadow',
+      visible: false // Mark as helper mesh
+    }
+    
+    this.scene.add(shadowMesh)
+
+    // Add to scene
+    this.scene.add(mesh)
+
+    // Create land piece object
+    const landPiece: LandPiece = {
+      geometry,
+      material,
+      mesh,
+      shadowMesh,
+      id,
+      type,
+      scale: scale.x
+    }
+
+    // Store land piece
+    this.landPieces.push(landPiece)
+
+    console.log(`🏔️ Land piece created: ${type} (${id}) - receiveShadow=true, invisible shadow caster added`)
+    return landPiece
+  }
+
+  public update(time: number): void {
+    // Update time uniform for all land pieces
+    this.landUniforms.uTime.value = time * 0.001
+  }
+
+  public setElevation(elevation: number): void {
+    this.landUniforms.uElevation.value = elevation
+  }
+
+  public setRoughness(roughness: number): void {
+    this.landUniforms.uRoughness.value = roughness
+  }
+
+  public setScale(scale: number): void {
+    this.landUniforms.uScale.value = scale
+  }
+
+  public setLandColor(color: THREE.Color): void {
+    this.landUniforms.uLandColor.value.copy(color)
+  }
+
+  public setRockColor(color: THREE.Color): void {
+    this.landUniforms.uRockColor.value.copy(color)
+  }
+
+  public setSandColor(color: THREE.Color): void {
+    this.landUniforms.uSandColor.value.copy(color)
+  }
+
+  public setMoisture(moisture: number): void {
+    this.landUniforms.uMoisture.value = moisture
+  }
+
+  public setSunDirection(direction: THREE.Vector3): void {
+    this.landUniforms.uSunDirection.value.copy(direction)
+  }
+
+  public setSunColor(color: THREE.Color): void {
+    this.landUniforms.uSunColor.value.copy(color)
+  }
+
+  public setSunIntensity(intensity: number): void {
+    this.landUniforms.uSunIntensity.value = intensity
+  }
+
+  public setIslandRadius(radius: number): void {
+    this.landUniforms.uIslandRadius.value = radius
+  }
+
+  public setCoastSmoothness(smoothness: number): void {
+    this.landUniforms.uCoastSmoothness.value = smoothness
+  }
+
+  public setSeaLevel(level: number): void {
+    this.landUniforms.uSeaLevel.value = level
+  }
+
+  public removeLandPiece(id: string): boolean {
+    const index = this.landPieces.findIndex(piece => piece.id === id)
+    if (index !== -1) {
+      const piece = this.landPieces[index]
+      this.scene.remove(piece.mesh)
+      this.scene.remove(piece.shadowMesh)
+      piece.geometry.dispose()
+      piece.material.dispose()
+      if (Array.isArray(piece.shadowMesh.material)) {
+        piece.shadowMesh.material.forEach(mat => mat.dispose())
+      } else {
+        piece.shadowMesh.material.dispose()
+      }
+      piece.shadowMesh.geometry.dispose()
+      this.landPieces.splice(index, 1)
+      console.log(`🏔️ Land piece removed: ${id}`)
+      return true
+    }
+    return false
+  }
+
+  public getLandPieces(): LandPiece[] {
+    return this.landPieces
+  }
+
+  public getLandPiece(id: string): LandPiece | undefined {
+    return this.landPieces.find(piece => piece.id === id)
+  }
+
+  public clearAllLand(): void {
+    this.landPieces.forEach(piece => {
+      this.scene.remove(piece.mesh)
+      this.scene.remove(piece.shadowMesh)
+      piece.geometry.dispose()
+      piece.material.dispose()
+      if (Array.isArray(piece.shadowMesh.material)) {
+        piece.shadowMesh.material.forEach(mat => mat.dispose())
+      } else {
+        piece.shadowMesh.material.dispose()
+      }
+      piece.shadowMesh.geometry.dispose()
+    })
+    this.landPieces = []
+    console.log('🏔️ All land pieces cleared')
+  }
+
+  public setLandShadowCasting(enabled: boolean): void {
+    this.landPieces.forEach(piece => {
+      piece.shadowMesh.castShadow = enabled
+    })
+    console.log(`🏔️ Land shadow casting: ${enabled ? 'enabled' : 'disabled'}`)
+  }
+
+  public setLandShadowReceiving(enabled: boolean): void {
+    this.landPieces.forEach(piece => {
+      piece.mesh.receiveShadow = enabled
+    })
+    console.log(`🏔️ Land shadow receiving: ${enabled ? 'enabled' : 'disabled'}`)
   }
 }
 
@@ -292,6 +643,7 @@ interface DebugState {
   active: boolean
   stats: Stats | null
   gui: GUI | null
+  debugGUIManager: DebugGUIManager | null
   helpers: THREE.Object3D[]
 }
 
@@ -325,136 +677,8 @@ const Easing = {
 
 // ============================================================================
 // ANIMATION SYSTEM
+// Animation classes moved to separate AnimationSystem module
 // ============================================================================
-
-class Animation {
-  private startTime: number = 0
-  private startValues: any = {}
-  private endValues: any = {}
-  private isActive: boolean = false
-
-  constructor(
-    private target: THREE.Object3D,
-    private config: AnimationConfig
-  ) {}
-
-  public to(values: any): this {
-    this.endValues = { ...this.endValues, ...values }
-    return this
-  }
-
-  public start(): this {
-    this.captureStartValues()
-    this.isActive = true
-    this.startTime = performance.now()
-    this.config.onStart?.()
-    return this
-  }
-
-  public update(currentTime: number): boolean {
-    if (!this.isActive) return false
-
-    const elapsed = currentTime - this.startTime - this.config.delay
-    if (elapsed < 0) return true
-
-    let progress = Math.min(elapsed / this.config.duration, 1)
-    progress = this.config.easing(progress)
-
-    this.updateValues(progress)
-    this.config.onUpdate?.(progress)
-
-    if (elapsed >= this.config.duration) {
-      if (this.config.loop) {
-        this.startTime = currentTime
-        if (this.config.yoyo) {
-          const temp = this.startValues
-          this.startValues = this.endValues
-          this.endValues = temp
-        }
-      } else {
-        this.isActive = false
-        this.config.onComplete?.()
-        return false
-      }
-    }
-
-    return true
-  }
-
-  private captureStartValues(): void {
-    if (this.endValues.position) {
-      this.startValues.position = this.target.position.clone()
-    }
-    if (this.endValues.rotation) {
-      this.startValues.rotation = this.target.rotation.clone()
-    }
-    if (this.endValues.scale) {
-      this.startValues.scale = this.target.scale.clone()
-    }
-  }
-
-  private updateValues(progress: number): void {
-    if (this.startValues.position && this.endValues.position) {
-      this.target.position.lerpVectors(this.startValues.position, this.endValues.position, progress)
-    }
-    if (this.startValues.rotation && this.endValues.rotation) {
-      this.target.rotation.x = THREE.MathUtils.lerp(this.startValues.rotation.x, this.endValues.rotation.x, progress)
-      this.target.rotation.y = THREE.MathUtils.lerp(this.startValues.rotation.y, this.endValues.rotation.y, progress)
-      this.target.rotation.z = THREE.MathUtils.lerp(this.startValues.rotation.z, this.endValues.rotation.z, progress)
-    }
-    if (this.startValues.scale && this.endValues.scale) {
-      this.target.scale.lerpVectors(this.startValues.scale, this.endValues.scale, progress)
-    }
-  }
-
-  public isRunning(): boolean {
-    return this.isActive
-  }
-}
-
-class AnimationSystem {
-  private animations: Set<Animation> = new Set()
-  private isRunning: boolean = false
-
-  public createAnimation(target: THREE.Object3D, config: Partial<AnimationConfig> = {}): Animation {
-    const fullConfig: AnimationConfig = {
-      duration: 1000,
-      easing: Easing.linear,
-      loop: false,
-      yoyo: false,
-      delay: 0,
-      ...config
-    }
-    return new Animation(target, fullConfig)
-  }
-
-  public addAnimation(animation: Animation): void {
-    this.animations.add(animation)
-  }
-
-  public update(currentTime: number): void {
-    if (!this.isRunning) return
-
-    for (const animation of this.animations) {
-      const isActive = animation.update(currentTime)
-      if (!isActive) {
-        this.animations.delete(animation)
-      }
-    }
-  }
-
-  public start(): void {
-    this.isRunning = true
-  }
-
-  public stop(): void {
-    this.isRunning = false
-  }
-
-  public getAnimationCount(): number {
-    return this.animations.size
-  }
-}
 
 // ============================================================================
 // MAIN APPLICATION CLASS
@@ -466,18 +690,31 @@ class IntegratedThreeJSApp {
   private renderer!: THREE.WebGLRenderer
   private controls!: OrbitControls
   
-  // Systems
+  // Animation and systems
   private animationSystem: AnimationSystem
   private oceanLODSystem: OceanLODSystem | null = null
+  private landSystem: LandSystem | null = null
   private deviceType: DeviceType
   private inputMethods: InputMethod[]
   
-  // Objects
-  private animatedObjects: Map<string, THREE.Object3D> = new Map()
-  private shaderMaterial: THREE.ShaderMaterial | THREE.MeshStandardMaterial | null = null
-  private animatedMaterial: THREE.MeshStandardMaterial | null = null
+  // Unified management systems
+  private objectManager!: ObjectManager
+  private configManager: ConfigManager
+  private consoleCommands!: ConsoleCommands
   
-  // Sky System
+  // New modular systems
+  private collisionSystem!: CollisionSystem
+  private cameraManager!: CameraManager
+  private playerController!: PlayerController
+  private parameterManager!: ParameterManager
+  private parameterGUI!: ParameterGUI
+  
+  // Timing for delta time calculation
+  private lastTime: number = 0
+  
+  // All objects now managed via ObjectManager - no legacy references needed
+  
+  // Sky system
   private sky: Sky | null = null
   private sun: THREE.Vector3 = new THREE.Vector3()
   private skyConfig: SkyConfig = {
@@ -495,6 +732,7 @@ class IntegratedThreeJSApp {
     active: false,
     stats: null,
     gui: null,
+    debugGUIManager: null,
     helpers: []
   }
 
@@ -508,20 +746,94 @@ class IntegratedThreeJSApp {
     this.inputMethods = this.detectInputMethods()
     this.animationSystem = new AnimationSystem()
     
+    // Initialize management systems (scene will be initialized in init())
+    this.configManager = new ConfigManager()
+    
     this.init()
   }
 
   private async init(): Promise<void> {
+    this.detectDeviceType()
+    this.detectInputMethods()
+    
     this.initScene()
     this.initCamera()
     this.initRenderer()
     this.initControls()
-    this.initDebugSystem()
+    
+    // Initialize ObjectManager after scene is created
+    this.objectManager = new ObjectManager(this.scene, this.configManager)
+    
+    // Initialize new modular systems
+    this.collisionSystem = new CollisionSystem()
+    this.cameraManager = new CameraManager(this.scene, this.renderer, this.container)
+    this.parameterManager = new ParameterManager()
+    this.parameterGUI = new ParameterGUI(this.parameterManager, {
+      container: this.container,
+      position: { top: '0px', right: '320px' },
+      width: 300
+    })
+    
+    // Initialize player controller with collision system and camera manager
+    this.playerController = new PlayerController(
+      this.scene, 
+      this.collisionSystem, 
+      this.cameraManager,
+      {
+        position: new THREE.Vector3(0, 125, 0), // Increased Y position by 20 units
+        capsuleRadius: 0.5,
+        capsuleHeight: 2.0,
+        moveSpeed: 5.0,
+        jumpSpeed: 8.0,
+        gravity: 20.0
+      }
+    )
+    
+    // Register camera with ObjectManager for persistence
+    this.objectManager.registerCamera(this.camera, this.controls)
+    
+    // Auto-save camera state when controls change
+    this.controls.addEventListener('change', () => {
+      this.objectManager.saveCameraState()
+    })
+    
+            // console.log('📷 Camera registered with ObjectManager for persistence')
+    
+    // Initialize ConsoleCommands with app reference
+    this.consoleCommands = new ConsoleCommands({
+      scene: this.scene,
+      camera: this.camera,
+      renderer: this.renderer,
+      objectManager: this.objectManager,
+      animationSystem: this.animationSystem,
+      configManager: this.configManager,
+      collisionSystem: this.collisionSystem,
+      oceanLODSystem: this.oceanLODSystem,
+      landSystem: this.landSystem,
+      deviceType: this.deviceType,
+      inputMethods: this.inputMethods,
+      parameterManager: this.parameterManager,
+      parameterGUI: this.parameterGUI
+    })
+    
+    // Register global console commands
+    this.consoleCommands.registerGlobalCommands()
+    
+    // Set up locked position checker for animation system (using ObjectManager)
+    this.animationSystem.setLockedPositionChecker((uuid: string) => this.objectManager.getLockedPositions().has(uuid))
+    
     await this.createContent()
+    
     this.setupEventListeners()
     this.animate()
     
     this.animationSystem.start()
+    
+    // Initialize debug system after all other systems are ready
+    this.initDebugSystem()
+    
+    // Show initial help overlay
+    this.showInitialHelp()
   }
 
   private detectDeviceType(): DeviceType {
@@ -614,6 +926,8 @@ class IntegratedThreeJSApp {
     // Set reasonable zoom limits for ocean viewing
     this.controls.minDistance = 2
     this.controls.maxDistance = 1000
+    
+    // console.log('🎮 Controls initialized')
   }
 
   private initDebugSystem(): void {
@@ -632,7 +946,9 @@ class IntegratedThreeJSApp {
         animationCount: this.animationSystem.getAnimationCount(),
         triangles: this.renderer.info.render.triangles,
         drawCalls: this.renderer.info.render.calls,
-        objects: this.animatedObjects.size
+        managedObjects: this.objectManager?.getAllObjects().length || 0,
+        oceanLODs: this.oceanLODSystem?.getLODLevels().length || 0,
+        landPieces: this.landSystem?.getLandPieces().length || 0
       }
     }
   }
@@ -650,205 +966,98 @@ class IntegratedThreeJSApp {
   private enableDebug(): void {
     this.debugState.active = true
     
-    // Add Stats
+    // Create stats
     this.debugState.stats = new Stats()
+    this.debugState.stats.dom.style.position = 'absolute'
+    this.debugState.stats.dom.style.top = '0px'
+    this.debugState.stats.dom.style.left = '0px'
     this.container.appendChild(this.debugState.stats.dom)
     
-    // Add GUI
+    // Create legacy GUI for backward compatibility
     this.debugState.gui = new GUI()
-    this.setupGUI()
+    this.debugState.gui.domElement.style.position = 'absolute'
+    this.debugState.gui.domElement.style.top = '0px'
+    this.debugState.gui.domElement.style.right = '0px'
+    this.container.appendChild(this.debugState.gui.domElement)
+    
+    // Initialize the new centralized Debug GUI Manager
+    this.debugState.debugGUIManager = new DebugGUIManager(this.container, {
+      scene: this.scene,
+      camera: this.camera,
+      renderer: this.renderer,
+      objectManager: this.objectManager,
+      animationSystem: this.animationSystem,
+      collisionSystem: this.collisionSystem,
+      cameraManager: this.cameraManager,
+      playerController: this.playerController,
+      oceanLODSystem: this.oceanLODSystem,
+      landSystem: this.landSystem,
+      sky: this.sky,
+      skyConfig: this.skyConfig,
+      deviceType: this.deviceType,
+      inputMethods: this.inputMethods,
+      parameterManager: this.parameterManager,
+      parameterGUI: this.parameterGUI
+    })
+    
+    this.debugState.debugGUIManager.initialize()
+    
+    // Initialize the Parameter GUI
+    this.parameterGUI.initialize()
     
     // Add helpers
     this.addHelpers()
     
-    console.log('🐛 Debug mode enabled!')
-    console.log('Available functions: toggleDebug(), getPerformanceStats()')
+    // Enable performance monitoring
+    performanceMonitor.enable()
+    
+    // Show player debug wireframe if in player camera mode
+    if (this.cameraManager.getCurrentMode() === 'player') {
+      this.playerController.setDebugVisible(true)
+    }
+    
+    logger.info(LogModule.SYSTEM, 'Debug mode enabled with centralized GUI Manager and Parameter GUI')
   }
 
   private disableDebug(): void {
     this.debugState.active = false
     
-    // Remove Stats
+    // Remove stats
     if (this.debugState.stats) {
       this.container.removeChild(this.debugState.stats.dom)
       this.debugState.stats = null
     }
     
-    // Remove GUI
+    // Remove legacy GUI
     if (this.debugState.gui) {
       this.debugState.gui.destroy()
       this.debugState.gui = null
     }
     
+    // Dispose of centralized GUI Manager
+    if (this.debugState.debugGUIManager) {
+      this.debugState.debugGUIManager.dispose()
+      this.debugState.debugGUIManager = null
+    }
+    
+    // Hide Parameter GUI (don't dispose, just hide to preserve parameters)
+    this.parameterGUI.hide()
+    
     // Remove helpers
     this.removeHelpers()
     
-    console.log('🐛 Debug mode disabled')
+    // Disable performance monitoring
+    performanceMonitor.disable()
+    
+    // Hide player debug wireframe
+    this.playerController.setDebugVisible(false)
+    
+    logger.info(LogModule.SYSTEM, 'Debug mode disabled - parameters preserved')
   }
 
-  private setupGUI(): void {
-    if (!this.debugState.gui) return
-    
-    const gui = this.debugState.gui
-    
-    // Device info
-    const deviceFolder = gui.addFolder('Device Info')
-    deviceFolder.add({ type: this.deviceType }, 'type').name('Device Type')
-    deviceFolder.add({ width: window.innerWidth }, 'width').name('Width')
-    deviceFolder.add({ height: window.innerHeight }, 'height').name('Height')
-    deviceFolder.open()
-    
-    // Animation controls
-    const animFolder = gui.addFolder('Animation System')
-    animFolder.add(this.animationSystem, 'start').name('Start Animations')
-    animFolder.add(this.animationSystem, 'stop').name('Stop Animations')
-    animFolder.open()
-    
-    // Camera controls
-    const cameraFolder = gui.addFolder('Camera')
-    cameraFolder.add(this.camera.position, 'x', -20, 20)
-    cameraFolder.add(this.camera.position, 'y', -20, 20)
-    cameraFolder.add(this.camera.position, 'z', -20, 20)
-    cameraFolder.add(this.camera, 'fov', 10, 150).onChange(() => {
-      this.camera.updateProjectionMatrix()
-    })
-    
-          // Material controls
-      if (this.shaderMaterial) {
-        if (this.shaderMaterial instanceof THREE.ShaderMaterial) {
-          const shaderFolder = gui.addFolder('Shader Material')
-          shaderFolder.add(this.shaderMaterial.uniforms.uAmplitude, 'value', 0, 1).name('Wave Amplitude')
-          shaderFolder.addColor(this.shaderMaterial.uniforms.uColorA, 'value').name('Color A')
-          shaderFolder.addColor(this.shaderMaterial.uniforms.uColorB, 'value').name('Color B')
-          shaderFolder.open()
-        } else if (this.shaderMaterial instanceof THREE.MeshStandardMaterial) {
-          const materialFolder = gui.addFolder('Standard Material')
-          materialFolder.add(this.shaderMaterial, 'metalness', 0, 1).name('Metalness')
-          materialFolder.add(this.shaderMaterial, 'roughness', 0, 1).name('Roughness')
-          materialFolder.addColor(this.shaderMaterial, 'color').name('Base Color')
-          materialFolder.open()
-        }
-      }
+  // setupGUI method removed - now handled by DebugGUIManager
 
-      // Sky controls - Preetham atmospheric scattering parameters
-      if (this.sky) {
-        const skyFolder = gui.addFolder('Sky System')
-        
-        skyFolder.add(this.skyConfig, 'turbidity', 0, 20, 0.1)
-          .name('Turbidity')
-          .onChange(() => this.updateSkyUniforms())
-          
-        skyFolder.add(this.skyConfig, 'rayleigh', 0, 4, 0.001)
-          .name('Rayleigh')
-          .onChange(() => this.updateSkyUniforms())
-          
-        skyFolder.add(this.skyConfig, 'mieCoefficient', 0, 0.1, 0.001)
-          .name('Mie Coefficient')
-          .onChange(() => this.updateSkyUniforms())
-          
-        skyFolder.add(this.skyConfig, 'mieDirectionalG', 0, 1, 0.001)
-          .name('Mie Direction')
-          .onChange(() => this.updateSkyUniforms())
-          
-        skyFolder.add(this.skyConfig, 'elevation', -90, 90, 1)
-          .name('Sun Elevation')
-          .onChange(() => this.updateSunPosition())
-          
-        skyFolder.add(this.skyConfig, 'azimuth', -180, 180, 1)
-          .name('Sun Azimuth')
-          .onChange(() => this.updateSunPosition())
-          
-        skyFolder.add(this.skyConfig, 'exposure', 0, 1, 0.001)
-          .name('Exposure')
-          .onChange((value: number) => {
-            this.renderer.toneMappingExposure = value
-          })
-
-        skyFolder.open()
-      }
-
-      // Ocean controls
-      if (this.oceanLODSystem) {
-        const oceanFolder = gui.addFolder('Ocean System')
-        const oceanLevels = this.oceanLODSystem.getLODLevels()
-        
-        if (oceanLevels.length > 0) {
-          const oceanUniforms = oceanLevels[0].material.uniforms
-          
-          oceanFolder.add(oceanUniforms.uAmplitude, 'value', 0, 2, 0.1).name('Wave Amplitude')
-          oceanFolder.add(oceanUniforms.uWaveSpeed, 'value', 0.1, 3, 0.1).name('Wave Speed')
-          oceanFolder.add(oceanUniforms.uWindStrength, 'value', 0, 3, 0.1).name('Wind Strength')
-          oceanFolder.add(oceanUniforms.uWindDirection.value, 'x', -1, 1, 0.1).name('Wind Dir X')
-          oceanFolder.add(oceanUniforms.uWindDirection.value, 'y', -1, 1, 0.1).name('Wind Dir Z')
-          oceanFolder.add(oceanUniforms.uTransparency, 'value', 0, 1, 0.01).name('Transparency')
-          oceanFolder.add(oceanUniforms.uReflectionStrength, 'value', 0, 1, 0.01).name('Reflection')
-          oceanFolder.addColor(oceanUniforms.uWaterColor, 'value').name('Shallow Water')
-          oceanFolder.addColor(oceanUniforms.uDeepWaterColor, 'value').name('Deep Water')
-          
-          // LOD info
-          const lodInfo = { 'Visible Levels': '0' }
-          oceanFolder.add(lodInfo, 'Visible Levels').name('LOD Info').listen()
-          
-          // Ocean controls
-          const oceanControls = {
-            'Reset Positions': () => {
-              if (this.oceanLODSystem) {
-                this.oceanLODSystem.resetOceanPositions()
-                console.log('🌊 Ocean positions reset')
-              }
-            }
-          }
-          oceanFolder.add(oceanControls, 'Reset Positions').name('Reset Ocean')
-          
-          // Add debug info for simplified LOD system
-          const debugInfo = {
-            'Camera Distance': 0,
-            'Active LOD Level': 0,
-            'Ocean Position': '(0, -2, 0)',
-            'LOD Thresholds': 'Close: <150, Medium: 150-600, Far: >600'
-          }
-          
-          oceanFolder.add(debugInfo, 'Camera Distance').name('Distance from Origin').listen()
-          oceanFolder.add(debugInfo, 'Active LOD Level').name('Current LOD Level').listen()
-          oceanFolder.add(debugInfo, 'Ocean Position').name('Ocean Center').listen()
-          oceanFolder.add(debugInfo, 'LOD Thresholds').name('LOD Ranges').listen()
-          
-          // Update debug info in animation loop
-          setInterval(() => {
-            if (this.camera) {
-              const pos = this.camera.position
-              const cameraDistance = Math.sqrt(pos.x * pos.x + pos.z * pos.z)
-              
-              let activeLOD = 0
-              if (cameraDistance < 150) {
-                activeLOD = 0 // Close
-              } else if (cameraDistance < 600) {
-                activeLOD = 1 // Medium
-              } else {
-                activeLOD = 2 // Far
-              }
-              
-              debugInfo['Camera Distance'] = Math.round(cameraDistance)
-              debugInfo['Active LOD Level'] = activeLOD
-              
-              // Show ocean position
-              const activeLevel = oceanLevels.find(level => level.mesh.visible)
-              if (activeLevel) {
-                const pos = activeLevel.mesh.position
-                debugInfo['Ocean Position'] = `(${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})`
-              }
-              
-              const visibleLevels = oceanLevels
-                .map((level, index) => level.mesh.visible ? index : -1)
-                .filter(index => index !== -1)
-              lodInfo['Visible Levels'] = `${visibleLevels.length} (${visibleLevels.join(',')})`
-            }
-          }, 200)
-        }
-        
-        oceanFolder.open()
-      }
-  }
+  // All GUI setup methods removed - now handled by DebugGUIManager
 
   private addHelpers(): void {
     // Grid helper
@@ -878,30 +1087,244 @@ class IntegratedThreeJSApp {
     this.addLighting()
     this.createSkySystem()
     await this.createOceanSystem()
-    await this.createAnimatedObjects()
-    await this.createShaderObjects()
-    await this.createTSLObjects()
+    await this.createLandSystem()
+    
+    // Register land meshes with collision system
+    if (this.landSystem) {
+      const landMeshes = this.landSystem.getLandPieces().map(piece => piece.mesh)
+      this.collisionSystem.registerLandMeshes(landMeshes)
+      
+      // Debug: Log land mesh registration
+      console.log(`🏔️ Registered ${landMeshes.length} land meshes with collision system:`)
+      landMeshes.forEach((mesh, index) => {
+        console.log(`  ${index}: ${mesh.userData.id} (${mesh.userData.type}/${mesh.userData.landType}) at (${mesh.position.x.toFixed(1)}, ${mesh.position.y.toFixed(1)}, ${mesh.position.z.toFixed(1)})`)
+      })
+      
+      // Test collision at origin after registration
+      setTimeout(() => {
+        console.log('🧪 Testing collision at origin (0, 10, 0)...')
+        this.collisionSystem.debugCollisionTest(new THREE.Vector3(0, 10, 0))
+      }, 1000)
+    }
+    
+    // Set up camera switching controls
+    this.setupCameraSwitching()
+    
+    // Initialize ObjectLoader with required systems
+    ObjectLoader.initialize(this.scene, this.objectManager, this.animationSystem)
+    
+    // Load all objects using the unified ObjectLoader system
+    await ObjectLoader.loadDefaultScene()
+    
+    // Load saved positions using ObjectManager
+    this.objectManager.loadPersistentStates()
+    
+    // Load saved camera state
+    const cameraLoaded = this.objectManager.loadCameraState()
+    if (cameraLoaded) {
+      // console.log('📷 Camera state restored from previous session')
+    } else {
+      // console.log('📷 No saved camera state found, using default position')
+    }
+    
+    // Save current parameters as first state if no saved states exist
+    if (this.parameterManager.getSavedStateNames().length === 0) {
+      this.parameterManager.saveState('initial', 'Initial application state')
+      logger.info(LogModule.SYSTEM, 'Initial parameters saved as first state')
+    }
+    
+    // console.log('🔄 All objects created via ObjectLoader, positions loaded via ObjectManager')
+    // console.log('🎯 Unified object system ready! Use help() in console for available commands')
+    // console.log('📷 Camera Controls: C = Switch between System/Player cameras')
+  }
+
+  /**
+   * Set up camera switching functionality
+   */
+  private setupCameraSwitching(): void {
+    // Create camera mode indicator
+    this.createCameraModeIndicator()
+    
+    // Add keyboard listener for camera switching
+    document.addEventListener('keydown', (event) => {
+      if (event.code === 'KeyC') {
+        const currentMode = this.cameraManager.getCurrentMode()
+        const newMode = currentMode === 'system' ? 'player' : 'system'
+        
+        // Use immediate switch with pointer lock request for user-initiated switches
+        this.cameraManager.switchCamera(newMode, true)
+        
+        // Update the indicator
+        this.updateCameraModeIndicator(newMode)
+        
+        // Toggle player debug wireframe based on debug mode and camera mode
+        if (newMode === 'player' && this.debugState.active) {
+          this.playerController.setDebugVisible(true)
+        } else {
+          this.playerController.setDebugVisible(false)
+        }
+        
+        // console.log(`📷 Switched to ${newMode} camera`)
+        
+        // Additional guidance for player camera
+        if (newMode === 'player') {
+          // console.log('🎮 PLAYER MODE ACTIVE:')
+          // console.log('   • WASD = Move around')
+          // console.log('   • Mouse = Look around')
+          // console.log('   • Space = Jump')
+          // console.log('   • Shift = Run')
+          // console.log('   • C = Switch back to system camera')
+          // console.log('📷 If mouse look doesn\'t work, click on the canvas first')
+          
+          // Show a temporary on-screen message
+          this.showTemporaryMessage('Player Mode Active - Use WASD to move, mouse to look', 3000)
+        } else {
+          // console.log('📷 SYSTEM MODE ACTIVE:')
+          // console.log('   • Mouse drag = Rotate camera')
+          // console.log('   • Scroll = Zoom in/out')
+          // console.log('   • C = Switch to player camera for WASD movement')
+          
+          this.showTemporaryMessage('System Mode - Press C for player movement', 2000)
+        }
+      }
+    })
+    
+    // Set initial debug visibility for player
+    if (this.debugState.active) {
+      this.playerController.setDebugVisible(true)
+    }
+    
+    // console.log('📷 Camera switching controls initialized (Press C to switch)')
+    // console.log('🎮 Current mode: System Camera - Press C to enable WASD movement')
+  }
+
+  /**
+   * Create a persistent camera mode indicator
+   */
+  private createCameraModeIndicator(): void {
+    const indicator = document.createElement('div')
+    indicator.id = 'camera-mode-indicator'
+    indicator.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-family: Arial, sans-serif;
+      font-size: 12px;
+      z-index: 1000;
+      pointer-events: none;
+      transition: all 0.3s ease;
+    `
+    indicator.textContent = 'System Camera'
+    document.body.appendChild(indicator)
+  }
+
+  /**
+   * Update the camera mode indicator
+   */
+  private updateCameraModeIndicator(mode: 'system' | 'player'): void {
+    const indicator = document.getElementById('camera-mode-indicator')
+    if (indicator) {
+      if (mode === 'player') {
+        indicator.textContent = 'Player Camera'
+        indicator.style.background = 'rgba(0, 128, 0, 0.8)'
+        indicator.style.color = 'white'
+      } else {
+        indicator.textContent = 'System Camera'
+        indicator.style.background = 'rgba(0, 0, 0, 0.7)'
+        indicator.style.color = 'white'
+      }
+    }
+  }
+
+  /**
+   * Show a temporary message on screen
+   */
+  private showTemporaryMessage(message: string, duration: number = 3000): void {
+    // Remove any existing message
+    const existingMessage = document.getElementById('temp-message')
+    if (existingMessage) {
+      existingMessage.remove()
+    }
+    
+    // Create new message element
+    const messageElement = document.createElement('div')
+    messageElement.id = 'temp-message'
+    messageElement.style.cssText = `
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      z-index: 1000;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    `
+    messageElement.textContent = message
+    
+    document.body.appendChild(messageElement)
+    
+    // Remove after duration
+    setTimeout(() => {
+      if (messageElement.parentNode) {
+        messageElement.style.opacity = '0'
+        setTimeout(() => {
+          if (messageElement.parentNode) {
+            messageElement.remove()
+          }
+        }, 300)
+      }
+    }, duration)
   }
 
   private addLighting(): void {
-    // Brighter ambient light to make materials more visible
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.8)
+    // Ambient light for global illumination
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.3)
     this.scene.add(ambientLight)
 
-    // Main directional light (sun)
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0)
-    directionalLight.position.set(10, 10, 5)
+    // Main directional light (sun) with enhanced shadow mapping
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2)
+    directionalLight.position.set(50, 50, 25)
     directionalLight.castShadow = this.rendererConfig.shadows
+    
     if (directionalLight.castShadow) {
-      directionalLight.shadow.mapSize.width = 2048
-      directionalLight.shadow.mapSize.height = 2048
+      // High-quality shadow mapping
+      directionalLight.shadow.mapSize.width = 4096
+      directionalLight.shadow.mapSize.height = 4096
+      directionalLight.shadow.camera.near = 0.5
+      directionalLight.shadow.camera.far = 500
+      
+      // Large shadow camera frustum to cover the entire scene
+      const shadowCameraSize = 200
+      directionalLight.shadow.camera.left = -shadowCameraSize
+      directionalLight.shadow.camera.right = shadowCameraSize
+      directionalLight.shadow.camera.top = shadowCameraSize
+      directionalLight.shadow.camera.bottom = -shadowCameraSize
+      
+      // Soft shadows with improved bias to prevent shadow acne
+      directionalLight.shadow.radius = 8
+      directionalLight.shadow.blurSamples = 25
+      directionalLight.shadow.bias = -0.0001
     }
+    
+    directionalLight.target.position.set(0, 0, 0)
     this.scene.add(directionalLight)
+    this.scene.add(directionalLight.target)
 
-    // Add fill light for better visibility
-    const fillLight = new THREE.DirectionalLight(0x8899ff, 0.4)
-    fillLight.position.set(-5, 5, -5)
+    // Softer fill light for better visibility
+    const fillLight = new THREE.DirectionalLight(0x8899ff, 0.2)
+    fillLight.position.set(-25, 25, -25)
     this.scene.add(fillLight)
+    
+    // console.log('💡 Lighting system initialized')
   }
 
   private createSkySystem(): void {
@@ -926,7 +1349,7 @@ class IntegratedThreeJSApp {
     // Enable tone mapping for realistic sky rendering
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
 
-    console.log('🌅 Sky system initialized with Preetham atmospheric scattering model')
+    // console.log('🌅 Sky system initialized')
   }
 
   private updateSunPosition(): void {
@@ -951,14 +1374,43 @@ class IntegratedThreeJSApp {
       
       // Adjust light intensity based on sun elevation (realistic day/night cycle)
       const sunElevation = this.skyConfig.elevation
-      const intensity = Math.max(0.1, Math.sin(THREE.MathUtils.degToRad(sunElevation)) * 0.8)
+      const intensity = Math.max(0.1, Math.sin(THREE.MathUtils.degToRad(sunElevation)) * 1.2)
       directionalLight.intensity = intensity
       
       // Adjust light color based on time of day (sunset/sunrise colors)
       const sunsetColor = new THREE.Color(1, 0.4, 0.1)
       const dayColor = new THREE.Color(1, 1, 0.9)
+      const nightColor = new THREE.Color(0.2, 0.3, 0.6)
       const t = Math.max(0, Math.sin(THREE.MathUtils.degToRad(sunElevation)))
-      directionalLight.color.lerpColors(sunsetColor, dayColor, t)
+      
+      // Interpolate between night, sunset, and day colors
+      let finalColor: THREE.Color
+      if (sunElevation < -10) {
+        // Night time
+        finalColor = nightColor.clone()
+      } else if (sunElevation < 10) {
+        // Sunset/sunrise
+        finalColor = new THREE.Color().lerpColors(nightColor, sunsetColor, (sunElevation + 10) / 20)
+      } else {
+        // Day time
+        finalColor = new THREE.Color().lerpColors(sunsetColor, dayColor, Math.min(1, (sunElevation - 10) / 30))
+      }
+      
+      directionalLight.color.copy(finalColor)
+      
+      // Update ocean shader uniforms to match sun position, color, and intensity
+      if (this.oceanLODSystem) {
+        this.oceanLODSystem.setSunDirection(this.sun)
+        this.oceanLODSystem.setSunColor(finalColor)
+        this.oceanLODSystem.setSunIntensity(intensity)
+      }
+      
+      // Update land shader uniforms to match sun position, color, and intensity
+      if (this.landSystem) {
+        this.landSystem.setSunDirection(this.sun)
+        this.landSystem.setSunColor(finalColor)
+        this.landSystem.setSunIntensity(intensity)
+      }
     }
   }
 
@@ -989,10 +1441,10 @@ class IntegratedThreeJSApp {
         fragment: oceanFragmentShader
       })
 
-      console.log('🌊 Ocean LOD system initialized successfully!')
+      // console.log('🌊 Ocean system initialized')
 
     } catch (error) {
-      console.error('❌ Failed to create ocean system:', error)
+      // console.error('❌ Failed to create ocean system:', error)
       
       // Fallback: create a simple water plane
       const geometry = new THREE.PlaneGeometry(200, 200, 64, 64)
@@ -1011,284 +1463,66 @@ class IntegratedThreeJSApp {
       waterMesh.userData = { id: 'fallback-water', type: 'water' }
       this.scene.add(waterMesh)
       
-      console.log('🌊 Fallback water plane created')
+              // console.log('🌊 Fallback water created')
     }
   }
 
-  private async createAnimatedObjects(): Promise<void> {
-    // Create geometries
-    const geometries = [
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.SphereGeometry(0.5, 32, 32),
-      new THREE.ConeGeometry(0.5, 1, 8),
-      new THREE.CylinderGeometry(0.3, 0.3, 1, 16)
-    ]
-
-    // Define shader configurations for each mesh
-    const shaderConfigs: ShaderConfig[] = [
-      { vertexPath: 'src/shaders/noise-vertex.glsl', fragmentPath: 'src/shaders/noise-fragment.glsl' },      // Box: Noise shader
-      { vertexPath: 'src/shaders/spiral-vertex.glsl', fragmentPath: 'src/shaders/spiral-fragment.glsl' },   // Sphere: Spiral shader
-      { vertexPath: 'src/shaders/pulse-vertex.glsl', fragmentPath: 'src/shaders/pulse-fragment.glsl' },     // Cone: Pulse shader
-      { vertexPath: 'src/shaders/crystal-vertex.glsl', fragmentPath: 'src/shaders/crystal-fragment.glsl' }  // Cylinder: Crystal shader
-    ]
-
-    for (let i = 0; i < 4; i++) {
-      try {
-        // Load shader pair from external files
-        const { vertex: vertexShader, fragment: fragmentShader } = await ShaderLoader.loadShaderPair(shaderConfigs[i])
-
-        // Add random attributes to geometry
-        const geometry = geometries[i]
-        const positionAttribute = geometry.getAttribute('position')
-        const randomValues = new Float32Array(positionAttribute.count)
-        
-        for (let j = 0; j < randomValues.length; j++) {
-          randomValues[j] = Math.random()
-        }
-        
-        geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
-        
-        // Create shader material using loaded external shaders
-        const material = new THREE.ShaderMaterial({
-          vertexShader,
-          fragmentShader,
-          uniforms: {
-            uTime: { value: 0 },
-            uAmplitude: { value: 0.2 },
-            uColorA: { value: new THREE.Color(0xff0040) },
-            uColorB: { value: new THREE.Color(0x0040ff) }
-          },
-          side: THREE.DoubleSide,
-          transparent: false
-        })
-
-        const mesh = new THREE.Mesh(geometry, material)
-        mesh.position.set((i - 1.5) * 3, 0, 0)
-        mesh.userData = { id: `animated-${i}`, type: 'animated', material: material }
-        
-        this.scene.add(mesh)
-        this.animatedObjects.set(`animated-${i}`, mesh)
-        
-        this.createAnimationForObject(mesh, i)
-
-      } catch (error) {
-        console.error(`Failed to load shaders for mesh ${i}:`, error)
-        
-        // Fallback to basic material if shader loading fails
-        const fallbackMaterial = new THREE.MeshStandardMaterial({
-          color: 0xff0040,
-          metalness: 0.1,
-          roughness: 0.4,
-          emissive: 0x330011
-        })
-        
-        const geometry = geometries[i]
-        const mesh = new THREE.Mesh(geometry, fallbackMaterial)
-        mesh.position.set((i - 1.5) * 3, 0, 0)
-        mesh.userData = { id: `animated-${i}`, type: 'animated', material: fallbackMaterial }
-        
-        this.scene.add(mesh)
-        this.animatedObjects.set(`animated-${i}`, mesh)
-        this.createAnimationForObject(mesh, i)
-      }
-    }
-  }
-
-  private createAnimationForObject(object: THREE.Object3D, index: number): void {
-    const animations = [
-      // Rotation animation
-      () => {
-        const animation = this.animationSystem.createAnimation(object, {
-          duration: 2000,
-          easing: Easing.linear,
-          loop: true
-        })
-        animation.to({ rotation: new THREE.Euler(0, Math.PI * 2, 0) }).start()
-        this.animationSystem.addAnimation(animation)
-      },
-      
-      // Bounce animation
-      () => {
-        const animation = this.animationSystem.createAnimation(object, {
-          duration: 1000,
-          easing: Easing.easeOutElastic,
-          loop: true,
-          yoyo: true
-        })
-        animation.to({ position: new THREE.Vector3(object.position.x, 2, object.position.z) }).start()
-        this.animationSystem.addAnimation(animation)
-      },
-      
-      // Scale animation
-      () => {
-        const animation = this.animationSystem.createAnimation(object, {
-          duration: 1500,
-          easing: Easing.easeInOutCubic,
-          loop: true,
-          yoyo: true
-        })
-        animation.to({ scale: new THREE.Vector3(1.5, 1.5, 1.5) }).start()
-        this.animationSystem.addAnimation(animation)
-      },
-      
-      // Rotation + scale combination
-      () => {
-        const rotationAnim = this.animationSystem.createAnimation(object, {
-          duration: 3000,
-          easing: Easing.linear,
-          loop: true
-        })
-        rotationAnim.to({ rotation: new THREE.Euler(Math.PI * 2, Math.PI * 2, 0) }).start()
-        this.animationSystem.addAnimation(rotationAnim)
-        
-        const scaleAnim = this.animationSystem.createAnimation(object, {
-          duration: 2000,
-          easing: Easing.easeInOutQuad,
-          loop: true,
-          yoyo: true
-        })
-        scaleAnim.to({ scale: new THREE.Vector3(0.5, 0.5, 0.5) }).start()
-        this.animationSystem.addAnimation(scaleAnim)
-      }
-    ]
-
-    animations[index]()
-  }
-
-  private async createShaderObjects(): Promise<void> {
+  private async createLandSystem(): Promise<void> {
     try {
-      // Load main wave shader from external files
-      const { vertex: vertexShader, fragment: fragmentShader } = await ShaderLoader.loadShaderPair({
-        vertexPath: 'src/shaders/vertex.glsl',
-        fragmentPath: 'src/shaders/fragment.glsl'
+      // Load land shaders
+      const { vertex: landVertexShader, fragment: landFragmentShader } = await ShaderLoader.loadShaderPair({
+        vertexPath: 'src/shaders/land-vertex.glsl',
+        fragmentPath: 'src/shaders/land-fragment.glsl'
       })
-      
-      // Create geometry with random attributes (as expected by the shader)
-      const geometry = new THREE.PlaneGeometry(4, 4, 32, 32)
-      const positionAttribute = geometry.getAttribute('position')
-      const randomValues = new Float32Array(positionAttribute.count)
-      
-      for (let i = 0; i < randomValues.length; i++) {
-        randomValues[i] = Math.random()
-      }
-      
-      geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
-      
-      // Create shader material using the loaded GLSL shaders
-      const shaderMaterial = new THREE.ShaderMaterial({
-        vertexShader,
-        fragmentShader,
-        uniforms: {
-          uTime: { value: 0 },
-          uAmplitude: { value: 0.2 },
-          uColorA: { value: new THREE.Color(0xff0040) },
-          uColorB: { value: new THREE.Color(0x0040ff) }
-        },
-        side: THREE.DoubleSide,
-        transparent: true
+
+      // Initialize Land System
+      this.landSystem = new LandSystem(this.scene)
+
+      // Create some sample land pieces
+      await this.landSystem.createLandPiece('plane', {
+        vertex: landVertexShader,
+        fragment: landFragmentShader
+      }, {
+        id: 'main-terrain',
+        position: new THREE.Vector3(0, 0, 0),
+        size: 100,
+        segments: 128
       })
-      
-      // Create the mesh with shader material
-      const shaderMesh = new THREE.Mesh(geometry, shaderMaterial)
-      shaderMesh.position.set(-6, 0, 0)
-      shaderMesh.rotation.x = -Math.PI * 0.25
-      this.scene.add(shaderMesh)
-      
-      // Store reference for animation
-      this.shaderMaterial = shaderMaterial
-      
-      console.log('✅ Custom GLSL shaders loaded and applied!')
-      
+
+      // Create a hill
+      await this.landSystem.createLandPiece('sphere', {
+        vertex: landVertexShader,
+        fragment: landFragmentShader
+      }, {
+        id: 'hill-1',
+        position: new THREE.Vector3(30, 0, 30),
+        size: 25,
+        segments: 64
+      })
+
+      // Create a rocky outcrop
+      await this.landSystem.createLandPiece('box', {
+        vertex: landVertexShader,
+        fragment: landFragmentShader
+      }, {
+        id: 'rocky-outcrop',
+        position: new THREE.Vector3(-40, 0, 20),
+        size: 20,
+        segments: 32
+      })
+
+              // console.log('🏔️ Land system initialized')
+
     } catch (error) {
-      console.error('❌ Failed to load shaders:', error)
-      
-      // Fallback to simple material
-      const geometry = new THREE.PlaneGeometry(4, 4, 32, 32)
-      const fallbackMaterial = new THREE.MeshStandardMaterial({
-        color: 0xff0040,
-        metalness: 0.1,
-        roughness: 0.4,
-        emissive: 0x330011 // Add some emission to make it brighter
-      })
-      
-      const fallbackMesh = new THREE.Mesh(geometry, fallbackMaterial)
-      fallbackMesh.position.set(-6, 0, 0)
-      fallbackMesh.rotation.x = -Math.PI * 0.25
-      fallbackMesh.castShadow = true
-      fallbackMesh.receiveShadow = true
-      this.scene.add(fallbackMesh)
-      
-      this.shaderMaterial = fallbackMaterial
+      // console.error('❌ Failed to create land system:', error)
     }
   }
 
-  private async createTSLObjects(): Promise<void> {
-    // Create holographic icosahedron
-    const geometry = new THREE.IcosahedronGeometry(1, 4)
-    
-    // Add random attributes for holographic effect
-    const positionAttribute = geometry.getAttribute('position')
-    const randomValues = new Float32Array(positionAttribute.count)
-    
-    for (let i = 0; i < randomValues.length; i++) {
-      randomValues[i] = Math.random()
-    }
-    
-    geometry.setAttribute('aRandom', new THREE.BufferAttribute(randomValues, 1))
-    
-    // Load holographic shader from external files
-    const { vertex: holoVertexShader, fragment: holoFragmentShader } = await ShaderLoader.loadShaderPair({
-      vertexPath: 'src/shaders/hologram-vertex.glsl',
-      fragmentPath: 'src/shaders/hologram-fragment.glsl'
-    })
+  // Object creation methods moved to ObjectLoader system
 
-    // Create holographic shader material
-    const holographicMaterial = new THREE.ShaderMaterial({
-      vertexShader: holoVertexShader,
-      fragmentShader: holoFragmentShader,
-      uniforms: {
-        uTime: { value: 0 },
-        uAmplitude: { value: 0.15 },
-        uColorA: { value: new THREE.Color(0x00ff88) },
-        uColorB: { value: new THREE.Color(0xff8800) }
-      },
-      side: THREE.DoubleSide,
-      transparent: true,
-      blending: THREE.AdditiveBlending
-    })
+  // Legacy animation creation moved to ObjectLoader system
 
-    const animatedMesh = new THREE.Mesh(geometry, holographicMaterial)
-    animatedMesh.position.set(6, 0, 0)
-    animatedMesh.userData = { id: 'hologram', type: 'hologram', material: holographicMaterial }
-    this.scene.add(animatedMesh)
-    
-    // Store reference for uniform updates
-    this.animatedMaterial = holographicMaterial as any
 
-    // Animate the mesh position and rotation
-    const meshAnimation = this.animationSystem.createAnimation(animatedMesh, {
-      duration: 4000,
-      easing: Easing.easeInOutCubic,
-      loop: true,
-      yoyo: true
-    })
-    meshAnimation.to({ 
-      position: new THREE.Vector3(6, 3, 0),
-      rotation: new THREE.Euler(0, Math.PI, 0)
-    }).start()
-    this.animationSystem.addAnimation(meshAnimation)
-
-    // Additional rotation animation for holographic effect
-    const rotationAnimation = this.animationSystem.createAnimation(animatedMesh, {
-      duration: 6000,
-      easing: Easing.linear,
-      loop: true
-    })
-    rotationAnimation.to({ 
-      rotation: new THREE.Euler(Math.PI * 2, Math.PI * 2, Math.PI * 2)
-    }).start()
-    this.animationSystem.addAnimation(rotationAnimation)
-  }
 
   private setupEventListeners(): void {
     window.addEventListener('resize', this.onWindowResize.bind(this))
@@ -1315,7 +1549,7 @@ class IntegratedThreeJSApp {
           }
           break
         case 'p':
-          console.log((window as any).getPerformanceStats())
+          // console.log((window as any).getPerformanceStats())
           break
       }
     })
@@ -1351,14 +1585,84 @@ class IntegratedThreeJSApp {
     const raycaster = new THREE.Raycaster()
     raycaster.setFromCamera(mouse, this.camera)
     
-    const objects = Array.from(this.animatedObjects.values())
-    const intersects = raycaster.intersectObjects(objects)
+    // Get ALL meshes in the scene (recursive traversal)
+    const allMeshes: THREE.Mesh[] = []
+    this.scene.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        allMeshes.push(object)
+      }
+    })
+    
+    const intersects = raycaster.intersectObjects(allMeshes)
     
     if (intersects.length > 0) {
-      const clickedObject = intersects[0].object
-      console.log('Clicked object:', clickedObject.userData)
+      const clickedObject = intersects[0].object as THREE.Mesh
+      const distance = intersects[0].distance
+      const point = intersects[0].point
       
-      // Create highlight animation
+              // Find the mesh index in scene traversal order
+      const meshIndex = allMeshes.findIndex(mesh => mesh.uuid === clickedObject.uuid)
+      
+      // Enhanced mesh identification
+      // console.group('🎯 Mesh Click Detection')
+      // console.log('🔢 Mesh Index:', meshIndex >= 0 ? meshIndex : 'Not found')
+      // console.log('📍 Clicked Mesh:', clickedObject)
+      // console.log('🏷️  User Data:', clickedObject.userData)
+      // console.log('📏 Distance from Camera:', distance.toFixed(2))
+      // console.log('🎯 World Position:', {
+      //   x: point.x.toFixed(2),
+      //   y: point.y.toFixed(2),
+      //   z: point.z.toFixed(2)
+      // })
+      // console.log('📐 Mesh Position:', {
+      //   x: clickedObject.position.x.toFixed(2),
+      //   y: clickedObject.position.y.toFixed(2),
+      //   z: clickedObject.position.z.toFixed(2)
+      // })
+      // console.log('📏 Mesh Scale:', {
+      //   x: clickedObject.scale.x.toFixed(2),
+      //   y: clickedObject.scale.y.toFixed(2),
+      //   z: clickedObject.scale.z.toFixed(2)
+      // })
+      // console.log('🎨 Material Type:', clickedObject.material.constructor.name)
+      
+      // Identify mesh type based on userData or material properties
+      let meshType = 'Unknown'
+      let meshDescription = ''
+      
+      if (clickedObject.userData.type) {
+        meshType = clickedObject.userData.type
+        meshDescription = clickedObject.userData.id || 'No ID'
+      } else if (clickedObject.userData.id) {
+        meshType = 'Identified'
+        meshDescription = clickedObject.userData.id
+      } else {
+        // Try to identify by material or geometry properties
+        if (clickedObject.material instanceof THREE.ShaderMaterial) {
+          if (clickedObject.material.uniforms?.uWaterColor) {
+            meshType = 'Ocean'
+            meshDescription = 'Ocean LOD System'
+          } else if (clickedObject.material.uniforms?.uLandColor) {
+            meshType = 'Land'
+            meshDescription = 'Terrain System'
+          } else {
+            meshType = 'Shader'
+            meshDescription = 'Custom Shader Material'
+          }
+        } else if (clickedObject.material instanceof THREE.MeshStandardMaterial) {
+          meshType = 'Standard'
+          meshDescription = 'Standard Material Mesh'
+        }
+      }
+      
+      // console.log('🔍 Mesh Type:', meshType)
+      // console.log('📝 Description:', meshDescription)
+      // console.log('🆔 Object UUID:', clickedObject.uuid)
+      // console.log(`📋 Use: moveMesh(${meshIndex}, yOffset) to move this mesh`)
+      // console.groupEnd()
+      
+      // Create highlight animation only for small meshes (exclude ocean and land)
+      if (meshType !== 'Ocean' && meshType !== 'ocean' && meshType !== 'Land' && meshType !== 'land') {
       const originalScale = clickedObject.scale.clone()
       const highlightAnimation = this.animationSystem.createAnimation(clickedObject, {
         duration: 200,
@@ -1368,6 +1672,16 @@ class IntegratedThreeJSApp {
       })
       highlightAnimation.to({ scale: originalScale.clone().multiplyScalar(1.3) }).start()
       this.animationSystem.addAnimation(highlightAnimation)
+      } else {
+        // For large meshes (ocean/land), just log a special message
+        if (meshType === 'Ocean' || meshType === 'ocean') {
+          // console.log('🌊 Ocean mesh clicked - no highlight animation (too large)')
+        } else if (meshType === 'Land' || meshType === 'land') {
+          // console.log('🏔️ Land mesh clicked - no highlight animation (too large)')
+        }
+      }
+    } else {
+      // console.log('❌ No mesh clicked - clicked on empty space')
     }
   }
 
@@ -1375,39 +1689,63 @@ class IntegratedThreeJSApp {
     const animate = (currentTime: number) => {
       requestAnimationFrame(animate)
       
-      // Update controls
-      this.controls.update()
+      // Start performance monitoring
+      performanceMonitor.startFrame()
+      
+      // Calculate delta time for physics
+      const deltaTime = Math.min((currentTime - (this.lastTime || currentTime)) / 1000, 0.1)
+      this.lastTime = currentTime
+      
+      // Update controls (only for system camera)
+      if (this.cameraManager.getCurrentMode() === 'system') {
+        this.controls.update()
+      }
+      
+      // Update camera manager
+      this.cameraManager.update(deltaTime)
+      
+      // Update player controller (physics, movement, collision)
+      this.playerController.update(deltaTime)
+      
+      // Update collision system (gravity, collision resolution) - throttled for performance
+      performanceMonitor.startCollisionCheck()
+      this.collisionSystem.updateDynamicObjects(deltaTime)
+      performanceMonitor.endCollisionCheck()
       
       // Update animation system
       this.animationSystem.update(currentTime)
       
-      // Update shader material uniforms
-      if (this.shaderMaterial && this.shaderMaterial instanceof THREE.ShaderMaterial) {
-        this.shaderMaterial.uniforms.uTime.value = currentTime * 0.001
-        // Add subtle amplitude variation
-        this.shaderMaterial.uniforms.uAmplitude.value = 0.2 + Math.sin(currentTime * 0.0005) * 0.1
-      }
-      
-      // Update animated objects with shader materials
-      this.animatedObjects.forEach((object) => {
-        const mesh = object as THREE.Mesh
-        if (mesh.material instanceof THREE.ShaderMaterial) {
-          mesh.material.uniforms.uTime.value = currentTime * 0.001
-          // Add slight variation to each object's amplitude
-          const variation = Math.sin(currentTime * 0.0003 + object.position.x) * 0.05
-          mesh.material.uniforms.uAmplitude.value = 0.2 + variation
+      // Update shader material uniforms for all ObjectManager objects
+      this.objectManager.getAllObjects().forEach((managedObject) => {
+        const mesh = managedObject.mesh
+        if (mesh.material instanceof THREE.ShaderMaterial && mesh.material.uniforms) {
+          // Only update if uniforms exist
+          if (mesh.material.uniforms.uTime) {
+            mesh.material.uniforms.uTime.value = currentTime * 0.001
+          }
+          
+          // Add type-specific amplitude variations
+          if (mesh.material.uniforms.uAmplitude) {
+            if (managedObject.id.startsWith('animated-')) {
+              const variation = Math.sin(currentTime * 0.0003 + mesh.position.x) * 0.05
+              mesh.material.uniforms.uAmplitude.value = 0.2 + variation
+            } else if (managedObject.id === 'shader-plane') {
+              mesh.material.uniforms.uAmplitude.value = 0.2 + Math.sin(currentTime * 0.0005) * 0.1
+            } else if (managedObject.id === 'hologram') {
+              mesh.material.uniforms.uAmplitude.value = 0.15 + Math.sin(currentTime * 0.0008) * 0.05
+            }
+          }
         }
       })
-      
-      // Update holographic material
-      if (this.animatedMaterial && this.animatedMaterial instanceof THREE.ShaderMaterial) {
-        this.animatedMaterial.uniforms.uTime.value = currentTime * 0.001
-        this.animatedMaterial.uniforms.uAmplitude.value = 0.15 + Math.sin(currentTime * 0.0008) * 0.05
-      }
 
       // Update ocean LOD system
       if (this.oceanLODSystem) {
         this.oceanLODSystem.update(currentTime)
+      }
+
+      // Update land system
+      if (this.landSystem) {
+        this.landSystem.update(currentTime)
       }
 
       // Update sky system for automatic day/night cycle
@@ -1423,11 +1761,97 @@ class IntegratedThreeJSApp {
         this.debugState.stats.update()
       }
       
-      // Render
-      this.renderer.render(this.scene, this.camera)
+      // Start render timing
+      performanceMonitor.startRender()
+      
+      // Render with current camera from camera manager
+      const currentCamera = this.cameraManager.getCurrentCamera()
+      this.renderer.render(this.scene, currentCamera)
+      
+      // End render timing and performance monitoring
+      performanceMonitor.endRender()
+      performanceMonitor.endFrame()
     }
     
     animate(performance.now())
+  }
+
+  // Legacy methods moved to ConsoleCommands module for better organization
+  // Use help() in console to see available commands
+
+  setPlayerPosition(x: number, y: number, z: number): void {
+    this.playerController.setPosition(new THREE.Vector3(x, y, z))
+  }
+
+  getPlayerStatus(): void {
+    // console.log('Player Status:', this.playerController.getStatus())
+  }
+
+  togglePlayerDebug(): void {
+    if (this.playerController) {
+      const isVisible = this.playerController.isDebugWireframeVisible()
+      this.playerController.setDebugVisible(!isVisible)
+      // console.log(`🎮 Player debug wireframe ${!isVisible ? 'enabled' : 'disabled'}`)
+    }
+  }
+
+  testCollisionAtPlayerPosition(): void {
+    if (this.playerController) {
+      const position = this.playerController.getPosition()
+      this.collisionSystem.debugCollisionTest(position)
+    }
+  }
+
+  testPlayerCollision(): void {
+    if (this.playerController && this.collisionSystem) {
+      const position = this.playerController.getPosition()
+      console.log('🧪 Testing player collision detection...')
+      console.log(`Player position: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`)
+      
+      // Test collision at player position
+      const collision = this.collisionSystem.checkCollision('player', position)
+      console.log('Collision result:', collision)
+      
+      // Test ground height at player position
+      const groundHeight = this.collisionSystem.getGroundHeight(position.x, position.z)
+      console.log(`Ground height at (${position.x.toFixed(2)}, ${position.z.toFixed(2)}): ${groundHeight.toFixed(2)}`)
+      
+      // Test collision at origin
+      console.log('🧪 Testing collision at origin (0, 10, 0)...')
+      this.collisionSystem.debugCollisionTest(new THREE.Vector3(0, 10, 0))
+    }
+  }
+
+  testCollisionAtPosition(x: number, y: number, z: number): void {
+    const position = new THREE.Vector3(x, y, z)
+    this.collisionSystem.debugCollisionTest(position)
+  }
+
+  getCollisionSystem(): any {
+    return this.collisionSystem
+  }
+
+  /**
+   * Dispose of the Parameter GUI
+   */
+  public dispose(): void {
+    // Dispose of Parameter GUI
+    if (this.parameterGUI) {
+      this.parameterGUI.dispose()
+    }
+    
+    // Dispose of Parameter Manager
+    if (this.parameterManager) {
+      this.parameterManager.dispose()
+    }
+  }
+
+  /**
+   * Show initial help overlay
+   */
+  private showInitialHelp(): void {
+    // Help overlay removed - instructions moved to INSTRUCTIONS.md
+    // Users can access instructions via console help() command or read the markdown file
   }
 }
 
@@ -1464,53 +1888,31 @@ const app = new IntegratedThreeJSApp(
 // Make it available globally for debugging
 ;(window as any).threeJSApp = app
 
-// Print instructions
-console.log(`
-🚀 Three.js Garden with Ocean - Advanced Shader Showcase Loaded!
+// Register debug methods globally
+;(window as any).testPlayerCollision = () => app.testPlayerCollision()
+;(window as any).testFallbackGroundHeight = (x: number = 0, z: number = 0) => {
+  const collisionSystem = app.getCollisionSystem()
+  if (collisionSystem && collisionSystem.getGroundHeightFallback) {
+    const height = collisionSystem.getGroundHeightFallback(x, z)
+    console.log(`🔧 Fallback ground height at (${x}, ${z}): ${height.toFixed(2)}`)
+    return height
+  } else {
+    console.error('❌ Collision system or fallback method not available')
+    return -4.0
+  }
+}
 
-🎮 Controls:
-- Mouse/Touch: Rotate camera
-- Wheel/Pinch: Zoom camera
-- Click objects: Highlight animation
-- Space: Toggle animations
-- Ctrl/Cmd + D: Toggle debug mode
-- P: Print performance stats
+// Console commands are now handled by the ConsoleCommands module
+// Type help() in the console to see available commands
 
-🎨 Unique Shader Materials:
-- LEFT PLANE: Enhanced Wave Shader with multi-frequency waves and complex color mixing
-- BOX: Noise/Fire Shader with procedural displacement and flickering fire colors
-- SPHERE: Spiral/Ocean Shader with twisting geometry and ocean-like shimmer effects
-- CONE: Pulse/Plasma Shader with electric pulsing and arc lighting effects
-- CYLINDER: Crystal Shader with faceted geometry and golden amber crystalline effects
-- ICOSAHEDRON: Holographic Shader with iridescent colors and scanning line effects
+// Example automatic movement (commented out - use console commands instead)
+// setTimeout(() => {
+//   console.log('🎯 Example: Moving mesh to new position...')
+//   // Use moveMesh(id, x, y, z) in console for manual control
+//   // Example: moveMesh(0, 0, 15, 0) moves mesh 0 to position (0, 15, 0)
+// }, 1000)
 
-🌊 Ocean LOD System:
-- 5-Level LOD system for infinite ocean rendering
-- Realistic water with waves, foam, reflections, and caustics
-- Dynamic wind simulation and wave amplitude control
-- Automatic camera-following for seamless infinite ocean
-- Performance-optimized with distance-based LOD switching
-
-🐛 Debug Mode:
-- Add #debug to URL or press Ctrl/Cmd + D
-- Shows: Stats monitor, GUI controls for all shader parameters
-- Ocean controls: Wave amplitude, wind direction/strength, water colors
-- LOD info: Real-time visible level count
-- Remove #debug to hide all debug elements
-
-✨ Features Demonstrated:
-- TypeScript type safety & advanced patterns
-- Modular shader architecture with unique effects per mesh
-- LOD-based infinite ocean with realistic water simulation
-- Custom GLSL vertex and fragment shaders for water
-- Real-time uniform updates and animations
-- Advanced material effects (water, waves, foam, reflections)
-- Responsive device detection & controls
-- Comprehensive debug system with ocean parameter control
-
-🌿 Garden by the Sea - Each mesh has unique identity + infinite ocean horizon!
-Fly around to see the LOD system in action!
-`)
+// Instructions moved to INSTRUCTIONS.md
 
 // Export types for potential module usage
 export { 
@@ -1521,3 +1923,12 @@ export {
   type AnimationConfig,
   type QualityPreset
 } 
+
+// Configure logging for development
+logger.setDevelopmentMode()
+
+// Enable only specific modules for focused debugging
+logger.enableModule(LogModule.PLAYER)
+logger.enableModule(LogModule.CAMERA)
+// Enable collision debug logging temporarily to diagnose the issue
+logger.enableModule(LogModule.COLLISION)
