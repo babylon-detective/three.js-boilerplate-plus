@@ -138,11 +138,14 @@ export const DEFAULT_PARAMETER_SETS: Record<ParameterCategory, ParameterSet> = {
     version: '1.0.0',
     lastModified: Date.now(),
     parameters: [
-      { id: 'moveSpeed', category: 'player', type: 'number', min: 5, max: 50, step: 0.5, defaultValue: 25.0, currentValue: 25.0, description: 'Movement speed', unit: 'units/s' },
-      { id: 'jumpSpeed', category: 'player', type: 'number', min: 1, max: 20, step: 0.5, defaultValue: 8.0, currentValue: 8.0, description: 'Jump speed', unit: 'units/s' },
-      { id: 'gravity', category: 'player', type: 'number', min: 5, max: 50, step: 0.5, defaultValue: 20.0, currentValue: 20.0, description: 'Gravity strength', unit: 'units/s²' },
-      { id: 'capsuleRadius', category: 'player', type: 'number', min: 0.1, max: 2, step: 0.1, defaultValue: 0.5, currentValue: 0.5, description: 'Collision capsule radius', unit: 'units' },
-      { id: 'capsuleHeight', category: 'player', type: 'number', min: 0.5, max: 5, step: 0.1, defaultValue: 2.0, currentValue: 2.0, description: 'Collision capsule height', unit: 'units' }
+      { id: 'walkSpeed', category: 'player', type: 'number', min: 1, max: 50, step: 0.5, defaultValue: 25.0, currentValue: 25.0, description: 'Walk speed', unit: 'units/s' },
+      { id: 'runSpeed', category: 'player', type: 'number', min: 5, max: 80, step: 0.5, defaultValue: 40.0, currentValue: 40.0, description: 'Run speed', unit: 'units/s' },
+      { id: 'jumpForce', category: 'player', type: 'number', min: 5, max: 30, step: 0.5, defaultValue: 15.0, currentValue: 15.0, description: 'Jump force', unit: 'units/s' },
+      { id: 'gravity', category: 'player', type: 'number', min: 10, max: 50, step: 1, defaultValue: 25.0, currentValue: 25.0, description: 'Gravity strength', unit: 'units/s²' },
+      { id: 'radius', category: 'player', type: 'number', min: 0.1, max: 2, step: 0.1, defaultValue: 0.5, currentValue: 0.5, description: 'Player radius', unit: 'units' },
+      { id: 'height', category: 'player', type: 'number', min: 1, max: 3, step: 0.1, defaultValue: 1.8, currentValue: 1.8, description: 'Player height', unit: 'units' },
+      { id: 'friction', category: 'player', type: 'number', min: 0.1, max: 1, step: 0.05, defaultValue: 0.8, currentValue: 0.8, description: 'Ground friction' },
+      { id: 'airResistance', category: 'player', type: 'number', min: 0.5, max: 1, step: 0.01, defaultValue: 0.95, currentValue: 0.95, description: 'Air resistance' }
     ]
   },
 
@@ -174,6 +177,7 @@ export class ParameterManager {
   private savedStates: Map<string, ParameterConfiguration> = new Map()
   private autoSaveInterval: number | null = null
   private maxHistorySize = 50
+  private parameterChangeCallbacks: Map<string, Array<(category: ParameterCategory, parameterId: string, value: any) => void>> = new Map()
 
   constructor() {
     // Initialize with defaults
@@ -240,10 +244,30 @@ export class ParameterManager {
     this.currentParameters.lastModified = Date.now()
 
     // Add to history
-    this.addToHistory(action, { categories: { [category]: { parameters: [{ id: parameterId, currentValue: value }] } } })
+    const historyEntry: Partial<ParameterConfiguration> = {
+      categories: {} as Record<ParameterCategory, ParameterSet>
+    }
+    historyEntry.categories![category] = {
+      id: `${category}-history`,
+      name: `${category} History`,
+      description: `History entry for ${category}`,
+      version: '1.0.0',
+      lastModified: Date.now(),
+      parameters: [{ 
+        id: parameterId, 
+        category: category,
+        type: 'number',
+        defaultValue: 0,
+        currentValue: value 
+      }]
+    }
+    this.addToHistory(action, historyEntry)
 
     // Save to storage
     this.saveCurrentParameters()
+
+    // Trigger parameter change callbacks
+    this.triggerParameterChangeCallbacks(category, parameterId, value)
 
     logger.debug(LogModule.SYSTEM, `Parameter updated: ${category}.${parameterId} = ${value}`)
   }
@@ -261,6 +285,47 @@ export class ParameterManager {
    */
   public getAllParameters(): ParameterConfiguration {
     return JSON.parse(JSON.stringify(this.currentParameters)) // Deep copy
+  }
+
+  /**
+   * Register a callback for parameter changes
+   */
+  public onParameterChange(category: ParameterCategory, parameterId: string, callback: (category: ParameterCategory, parameterId: string, value: any) => void): void {
+    const key = `${category}.${parameterId}`
+    if (!this.parameterChangeCallbacks.has(key)) {
+      this.parameterChangeCallbacks.set(key, [])
+    }
+    this.parameterChangeCallbacks.get(key)!.push(callback)
+  }
+
+  /**
+   * Register a callback for all parameter changes in a category
+   */
+  public onCategoryChange(category: ParameterCategory, callback: (category: ParameterCategory, parameterId: string, value: any) => void): void {
+    const key = `${category}.*`
+    if (!this.parameterChangeCallbacks.has(key)) {
+      this.parameterChangeCallbacks.set(key, [])
+    }
+    this.parameterChangeCallbacks.get(key)!.push(callback)
+  }
+
+  /**
+   * Trigger parameter change callbacks
+   */
+  private triggerParameterChangeCallbacks(category: ParameterCategory, parameterId: string, value: any): void {
+    // Trigger specific parameter callbacks
+    const specificKey = `${category}.${parameterId}`
+    const specificCallbacks = this.parameterChangeCallbacks.get(specificKey)
+    if (specificCallbacks) {
+      specificCallbacks.forEach(callback => callback(category, parameterId, value))
+    }
+
+    // Trigger category callbacks
+    const categoryKey = `${category}.*`
+    const categoryCallbacks = this.parameterChangeCallbacks.get(categoryKey)
+    if (categoryCallbacks) {
+      categoryCallbacks.forEach(callback => callback(category, parameterId, value))
+    }
   }
 
   /**
@@ -299,7 +364,7 @@ export class ParameterManager {
   /**
    * Save current parameters as a named state
    */
-  public saveState(name: string, description?: string): void {
+  public saveState(name: string): void {
     const state: ParameterConfiguration = {
       ...this.currentParameters,
       id: name,
@@ -324,7 +389,9 @@ export class ParameterManager {
 
     this.currentParameters = { ...state, lastModified: Date.now() }
     this.saveCurrentParameters()
-    this.addToHistory('load_state', { stateName: name })
+    this.addToHistory('load_state', { 
+      categories: this.currentParameters.categories 
+    })
 
     logger.info(LogModule.SYSTEM, `Parameters loaded from state: ${name}`)
     return true

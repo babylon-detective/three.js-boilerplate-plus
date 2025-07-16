@@ -478,34 +478,52 @@ export class DebugGUIManager {
     const configFolder = playerFolder.addFolder('Configuration')
     const config = this.systems.playerController.getConfig()
     
-    configFolder.add({ moveSpeed: config.moveSpeed }, 'moveSpeed', 5, 50, 0.5)
-      .name('Move Speed')
+    configFolder.add({ walkSpeed: config.walkSpeed }, 'walkSpeed', 1, 50, 0.5)
+      .name('Walk Speed')
       .onChange((value: number) => {
-        this.systems.playerController.updateConfig({ moveSpeed: value })
+        this.systems.playerController.updateConfig({ walkSpeed: value })
       })
     
-    configFolder.add({ jumpSpeed: config.jumpSpeed }, 'jumpSpeed', 1, 20, 0.5)
-      .name('Jump Speed')
+    configFolder.add({ runSpeed: config.runSpeed }, 'runSpeed', 5, 80, 0.5)
+      .name('Run Speed')
       .onChange((value: number) => {
-        this.systems.playerController.updateConfig({ jumpSpeed: value })
+        this.systems.playerController.updateConfig({ runSpeed: value })
       })
     
-    configFolder.add({ gravity: config.gravity }, 'gravity', 5, 50, 0.5)
+    configFolder.add({ jumpForce: config.jumpForce }, 'jumpForce', 5, 30, 0.5)
+      .name('Jump Force')
+      .onChange((value: number) => {
+        this.systems.playerController.updateConfig({ jumpForce: value })
+      })
+    
+    configFolder.add({ gravity: config.gravity }, 'gravity', 10, 50, 1)
       .name('Gravity')
       .onChange((value: number) => {
         this.systems.playerController.updateConfig({ gravity: value })
       })
     
-    configFolder.add({ capsuleRadius: config.capsuleRadius }, 'capsuleRadius', 0.1, 2, 0.1)
-      .name('Capsule Radius')
+    configFolder.add({ radius: config.radius }, 'radius', 0.1, 2, 0.1)
+      .name('Radius')
       .onChange((value: number) => {
-        this.systems.playerController.updateConfig({ capsuleRadius: value })
+        this.systems.playerController.updateConfig({ radius: value })
       })
     
-    configFolder.add({ capsuleHeight: config.capsuleHeight }, 'capsuleHeight', 0.5, 5, 0.1)
-      .name('Capsule Height')
+    configFolder.add({ height: config.height }, 'height', 1, 3, 0.1)
+      .name('Height')
       .onChange((value: number) => {
-        this.systems.playerController.updateConfig({ capsuleHeight: value })
+        this.systems.playerController.updateConfig({ height: value })
+      })
+    
+    configFolder.add({ friction: config.friction }, 'friction', 0.1, 1, 0.05)
+      .name('Friction')
+      .onChange((value: number) => {
+        this.systems.playerController.updateConfig({ friction: value })
+      })
+    
+    configFolder.add({ airResistance: config.airResistance }, 'airResistance', 0.5, 1, 0.01)
+      .name('Air Resistance')
+      .onChange((value: number) => {
+        this.systems.playerController.updateConfig({ airResistance: value })
       })
     configFolder.open()
     

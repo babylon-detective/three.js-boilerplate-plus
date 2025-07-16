@@ -3,16 +3,38 @@ import { CollisionSystem, CollisionVolume, CollidableObject } from './CollisionS
 import { CameraManager } from './CameraManager'
 import { logger, LogModule } from './Logger'
 
+// ============================================================================
+// PLAYER CONFIGURATION
+// ============================================================================
+
 export interface PlayerConfig {
-  position: THREE.Vector3
-  capsuleRadius: number
-  capsuleHeight: number
-  moveSpeed: number
-  jumpSpeed: number
+  // Physical properties
+  height: number
+  radius: number
+  mass: number
+  
+  // Movement properties
+  walkSpeed: number
+  runSpeed: number
+  jumpForce: number
   gravity: number
+  
+  // Physics properties
+  groundCheckDistance: number
+  friction: number
+  airResistance: number
 }
 
-export interface MovementInput {
+export interface PlayerState {
+  position: THREE.Vector3
+  velocity: THREE.Vector3
+  onGround: boolean
+  canJump: boolean
+  isMoving: boolean
+  isRunning: boolean
+}
+
+export interface PlayerInput {
   forward: boolean
   backward: boolean
   left: boolean
@@ -21,56 +43,86 @@ export interface MovementInput {
   run: boolean
 }
 
+// ============================================================================
+// PLAYER CONTROLLER
+// ============================================================================
+
 export class PlayerController {
+  // Core systems
   private scene: THREE.Scene
   private collisionSystem: CollisionSystem
   private cameraManager: CameraManager
   
-  // Player properties
-  private position: THREE.Vector3
-  private velocity: THREE.Vector3 = new THREE.Vector3()
-  private onGround: boolean = false
+  // Configuration
+  private config: PlayerConfig
   
-  // Player configuration
-  private config: PlayerConfig = {
-    position: new THREE.Vector3(0, 20, 0), // Start 15 units higher (5 + 15 = 20)
-    capsuleRadius: 0.5,
-    capsuleHeight: 2.0,
-    moveSpeed: 25.0, // Increased from 15.0 to 25.0 for faster movement
-    jumpSpeed: 8.0,
-    gravity: 20.0
-  }
+  // State
+  private state: PlayerState
+  private input: PlayerInput
   
   // Visual representation
-  private playerMesh!: THREE.Mesh // Simple cube inside capsule
+  private mesh!: THREE.Mesh
   private debugWireframe: THREE.Object3D | null = null
   private isDebugVisible: boolean = false
   
-  // Movement input
-  private movementInput: MovementInput = {
-    forward: false,
-    backward: false,
-    left: false,
-    right: false,
-    jump: false,
-    run: false
-  }
-  
-  // Collision volume
+  // Collision
   private collisionVolume!: CollisionVolume
   
-  constructor(scene: THREE.Scene, collisionSystem: CollisionSystem, cameraManager: CameraManager, config?: Partial<PlayerConfig>) {
+  // Input handling
+  private keyStates: Map<string, boolean> = new Map()
+  private boundKeyDown: (event: KeyboardEvent) => void
+  private boundKeyUp: (event: KeyboardEvent) => void
+  
+  constructor(
+    scene: THREE.Scene,
+    collisionSystem: CollisionSystem,
+    cameraManager: CameraManager,
+    config?: Partial<PlayerConfig>
+  ) {
     this.scene = scene
     this.collisionSystem = collisionSystem
     this.cameraManager = cameraManager
     
-    // Apply custom config
-    if (config) {
-      this.config = { ...this.config, ...config }
+    // Initialize configuration
+    this.config = {
+      height: 1.8,
+      radius: 0.5,
+      mass: 70,
+      walkSpeed: 5.0,
+      runSpeed: 8.0,
+      jumpForce: 8.0,
+      gravity: 20.0,
+      groundCheckDistance: 0.1,
+      friction: 0.8,
+      airResistance: 0.95,
+      ...config
     }
     
-    this.position = this.config.position.clone()
+    // Initialize state
+    this.state = {
+      position: new THREE.Vector3(0, 10, 0),
+      velocity: new THREE.Vector3(),
+      onGround: false,
+      canJump: true,
+      isMoving: false,
+      isRunning: false
+    }
     
+    // Initialize input
+    this.input = {
+      forward: false,
+      backward: false,
+      left: false,
+      right: false,
+      jump: false,
+      run: false
+    }
+    
+    // Bind input handlers
+    this.boundKeyDown = this.handleKeyDown.bind(this)
+    this.boundKeyUp = this.handleKeyUp.bind(this)
+    
+    // Initialize player
     this.initializePlayer()
     this.setupInputHandlers()
     this.registerWithCollisionSystem()
@@ -83,39 +135,46 @@ export class PlayerController {
   // ============================================================================
 
   private initializePlayer(): void {
-    // Create player visual mesh (simple cube inside capsule)
-    const geometry = new THREE.BoxGeometry(1, 2, 1) // 1x2x1 units as specified
-    const material = new THREE.MeshStandardMaterial({ 
+    // Create player mesh (capsule-like shape)
+    const geometry = new THREE.CylinderGeometry(
+      this.config.radius,
+      this.config.radius,
+      this.config.height,
+      8
+    )
+    
+    const material = new THREE.MeshStandardMaterial({
       color: 0x4a90e2,
       transparent: true,
       opacity: 0.8
     })
     
-    this.playerMesh = new THREE.Mesh(geometry, material)
-    this.playerMesh.position.copy(this.position)
-    this.playerMesh.castShadow = true
-    this.playerMesh.name = 'PlayerMesh'
-    this.scene.add(this.playerMesh)
+    this.mesh = new THREE.Mesh(geometry, material)
+    this.mesh.position.copy(this.state.position)
+    this.mesh.castShadow = true
+    this.mesh.receiveShadow = true
+    this.mesh.name = 'PlayerMesh'
+    this.scene.add(this.mesh)
     
     // Create collision volume
     this.collisionVolume = {
       type: 'capsule',
-      position: this.position.clone(),
-      rotation: new THREE.Euler(0, 0, 0),
+      position: this.state.position.clone(),
+      rotation: new THREE.Euler(),
       dimensions: new THREE.Vector3(
-        this.config.capsuleRadius,
-        this.config.capsuleHeight,
+        this.config.radius,
+        this.config.height,
         0
       )
     }
     
-    // Create debug wireframe (initially hidden)
+    // Create debug wireframe
     this.createDebugWireframe()
   }
 
   private createDebugWireframe(): void {
     this.debugWireframe = this.collisionSystem.createDebugWireframe(this.collisionVolume, 0x00ff00)
-    this.debugWireframe.position.copy(this.position)
+    this.debugWireframe.position.copy(this.state.position)
     this.debugWireframe.visible = false
     this.scene.add(this.debugWireframe)
   }
@@ -123,363 +182,322 @@ export class PlayerController {
   private registerWithCollisionSystem(): void {
     const collidableObject: CollidableObject = {
       id: 'player',
-      mesh: this.playerMesh,
+      mesh: this.mesh,
       collisionVolume: this.collisionVolume,
       isStatic: false
     }
     
     this.collisionSystem.registerObject(collidableObject)
     
-    // Debug: Log player registration
-    logger.info(LogModule.PLAYER, `Player registered with collision system: position=(${this.position.x.toFixed(2)}, ${this.position.y.toFixed(2)}, ${this.position.z.toFixed(2)})`)
-    logger.info(LogModule.PLAYER, `Collision volume: ${this.collisionVolume.type} radius=${this.collisionVolume.dimensions.x} height=${this.collisionVolume.dimensions.y}`)
+    logger.info(LogModule.PLAYER, `Player registered with collision system at position (${this.state.position.x.toFixed(2)}, ${this.state.position.y.toFixed(2)}, ${this.state.position.z.toFixed(2)})`)
   }
 
   private setupInputHandlers(): void {
-    // Keyboard input for movement
-    document.addEventListener('keydown', this.onKeyDown.bind(this))
-    document.addEventListener('keyup', this.onKeyUp.bind(this))
+    document.addEventListener('keydown', this.boundKeyDown)
+    document.addEventListener('keyup', this.boundKeyUp)
   }
 
   // ============================================================================
   // INPUT HANDLING
   // ============================================================================
 
-  private onKeyDown(event: KeyboardEvent): void {
-    switch (event.code) {
-      case 'KeyW':
-      case 'ArrowUp':
-        this.movementInput.forward = true
-        break
-      case 'KeyS':
-      case 'ArrowDown':
-        this.movementInput.backward = true
-        break
-      case 'KeyA':
-      case 'ArrowLeft':
-        this.movementInput.left = true
-        break
-      case 'KeyD':
-      case 'ArrowRight':
-        this.movementInput.right = true
-        break
-      case 'Space':
-        this.movementInput.jump = true
-        event.preventDefault()
-        break
-      case 'ShiftLeft':
-      case 'ShiftRight':
-        this.movementInput.run = true
-        break
+  private handleKeyDown(event: KeyboardEvent): void {
+    // Prevent default for game keys
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight'].includes(event.code)) {
+      event.preventDefault()
     }
+    
+    this.keyStates.set(event.code, true)
+    this.updateInputState()
+    
+    logger.debug(LogModule.PLAYER, `Key pressed: ${event.code}`)
   }
 
-  private onKeyUp(event: KeyboardEvent): void {
-    switch (event.code) {
-      case 'KeyW':
-      case 'ArrowUp':
-        this.movementInput.forward = false
-        break
-      case 'KeyS':
-      case 'ArrowDown':
-        this.movementInput.backward = false
-        break
-      case 'KeyA':
-      case 'ArrowLeft':
-        this.movementInput.left = false
-        break
-      case 'KeyD':
-      case 'ArrowRight':
-        this.movementInput.right = false
-        break
-      case 'Space':
-        this.movementInput.jump = false
-        break
-      case 'ShiftLeft':
-      case 'ShiftRight':
-        this.movementInput.run = false
-        break
-    }
+  private handleKeyUp(event: KeyboardEvent): void {
+    this.keyStates.set(event.code, false)
+    this.updateInputState()
+    
+    logger.debug(LogModule.PLAYER, `Key released: ${event.code}`)
+  }
+
+  private updateInputState(): void {
+    this.input.forward = this.keyStates.get('KeyW') || false
+    this.input.backward = this.keyStates.get('KeyS') || false
+    this.input.left = this.keyStates.get('KeyA') || false
+    this.input.right = this.keyStates.get('KeyD') || false
+    this.input.jump = this.keyStates.get('Space') || false
+    this.input.run = (this.keyStates.get('ShiftLeft') || this.keyStates.get('ShiftRight')) || false
   }
 
   // ============================================================================
-  // MOVEMENT AND PHYSICS
+  // MOVEMENT SYSTEM
   // ============================================================================
 
-  /**
-   * Update player physics and movement
-   */
   public update(deltaTime: number): void {
+    // Always update movement and input
     this.updateMovement(deltaTime)
+    
+    // Update collision system
+    this.collisionSystem.updatePlayerPosition(this.state.position)
+    
+    // Always update physics and visuals
     this.updatePhysics(deltaTime)
     this.updateVisuals()
     this.updateCamera()
+    
+    // Log state occasionally
+    if (Math.random() < 0.01) {
+      logger.debug(LogModule.PLAYER, `State: pos=(${this.state.position.x.toFixed(2)}, ${this.state.position.y.toFixed(2)}, ${this.state.position.z.toFixed(2)}), vel=(${this.state.velocity.x.toFixed(2)}, ${this.state.velocity.y.toFixed(2)}, ${this.state.velocity.z.toFixed(2)}), onGround=${this.state.onGround}, moving=${this.state.isMoving}`)
+    }
   }
 
   private updateMovement(deltaTime: number): void {
-    if (this.cameraManager.getCurrentMode() !== 'player') {
-      return // Only process movement in player camera mode
+    // Get camera direction for movement
+    const camera = this.cameraManager.getCurrentCamera()
+    const cameraDirection = new THREE.Vector3()
+    camera.getWorldDirection(cameraDirection)
+    
+    // Create movement direction
+    const moveDirection = new THREE.Vector3()
+    
+    if (this.input.forward) {
+      moveDirection.add(cameraDirection.clone().setY(0).normalize())
+    }
+    if (this.input.backward) {
+      moveDirection.sub(cameraDirection.clone().setY(0).normalize())
+    }
+    if (this.input.left) {
+      moveDirection.add(cameraDirection.clone().setY(0).cross(new THREE.Vector3(0, 1, 0)).normalize())
+    }
+    if (this.input.right) {
+      moveDirection.sub(cameraDirection.clone().setY(0).cross(new THREE.Vector3(0, 1, 0)).normalize())
     }
     
-    // Debug: Log input state occasionally
-    if (Math.random() < 0.01) { // 1% chance per frame
-      logger.debug(LogModule.PLAYER, `Input state: forward=${this.movementInput.forward}, backward=${this.movementInput.backward}, left=${this.movementInput.left}, right=${this.movementInput.right}`)
-    }
-    
-    const moveVector = new THREE.Vector3()
-    const camera = this.cameraManager.getPlayerCamera()
-    
-    // Get camera forward and right vectors (only horizontal)
-    const forward = new THREE.Vector3()
-    camera.getWorldDirection(forward)
-    forward.y = 0
-    forward.normalize()
-    
-    const right = new THREE.Vector3()
-    right.crossVectors(forward, new THREE.Vector3(0, 1, 0))
-    right.normalize()
-    
-    // Calculate movement based on input
-    if (this.movementInput.forward) {
-      moveVector.add(forward)
-    }
-    if (this.movementInput.backward) {
-      moveVector.sub(forward)
-    }
-    if (this.movementInput.right) {
-      moveVector.add(right)
-    }
-    if (this.movementInput.left) {
-      moveVector.sub(right)
-    }
-    
-    // Normalize and apply speed
-    if (moveVector.length() > 0) {
-      moveVector.normalize()
-      const speed = this.movementInput.run ? this.config.moveSpeed * 2 : this.config.moveSpeed
-      moveVector.multiplyScalar(speed * deltaTime)
+    // Apply movement
+    if (moveDirection.length() > 0) {
+      moveDirection.normalize()
       
-      // Apply horizontal movement to velocity
-      this.velocity.x = moveVector.x
-      this.velocity.z = moveVector.z
+      // Determine speed
+      const speed = this.input.run ? this.config.runSpeed : this.config.walkSpeed
+      const movement = moveDirection.multiplyScalar(speed * deltaTime)
       
-      // Debug: Log movement occasionally
-      if (Math.random() < 0.01) { // 1% chance per frame
-        logger.debug(LogModule.PLAYER, `Movement applied: velocity=(${this.velocity.x.toFixed(2)}, ${this.velocity.y.toFixed(2)}, ${this.velocity.z.toFixed(2)})`)
-      }
+      // Apply horizontal movement
+      this.state.velocity.x = movement.x
+      this.state.velocity.z = movement.z
+      this.state.isMoving = true
+      this.state.isRunning = this.input.run
+      
+      logger.debug(LogModule.PLAYER, `Movement: speed=${speed}, direction=(${moveDirection.x.toFixed(2)}, ${moveDirection.z.toFixed(2)}), input=(${this.input.forward},${this.input.backward},${this.input.left},${this.input.right})`)
     } else {
       // Apply friction when not moving
-      this.velocity.x *= 0.8
-      this.velocity.z *= 0.8
+      this.state.velocity.x *= this.config.friction
+      this.state.velocity.z *= this.config.friction
+      this.state.isMoving = false
+      this.state.isRunning = false
+      
+      // Log when no movement input
+      if (this.input.forward || this.input.backward || this.input.left || this.input.right) {
+        logger.debug(LogModule.PLAYER, `No movement despite input: forward=${this.input.forward}, backward=${this.input.backward}, left=${this.input.left}, right=${this.input.right}`)
+      }
     }
     
     // Handle jumping
-    if (this.movementInput.jump && this.onGround) {
-      this.velocity.y = this.config.jumpSpeed
-      this.onGround = false
+    if (this.input.jump && this.state.onGround && this.state.canJump) {
+      this.state.velocity.y = this.config.jumpForce
+      this.state.onGround = false
+      this.state.canJump = false
+      
+      logger.debug(LogModule.PLAYER, 'Jump initiated')
+    }
+    
+    // Reset jump flag when on ground
+    if (this.state.onGround) {
+      this.state.canJump = true
     }
   }
 
   private updatePhysics(deltaTime: number): void {
     // Apply gravity
-    if (!this.onGround) {
-      this.velocity.y -= this.config.gravity * deltaTime
+    if (!this.state.onGround) {
+      this.state.velocity.y -= this.config.gravity * deltaTime
+    }
+    
+    // Apply air resistance
+    if (!this.state.onGround) {
+      this.state.velocity.x *= this.config.airResistance
+      this.state.velocity.z *= this.config.airResistance
     }
     
     // Calculate new position
-    const newPosition = this.position.clone()
-    newPosition.add(this.velocity.clone().multiplyScalar(deltaTime))
+    const newPosition = this.state.position.clone().add(
+      this.state.velocity.clone().multiplyScalar(deltaTime)
+    )
     
-    // Update collision system with player position for optimization
-    this.collisionSystem.updatePlayerPosition(this.position)
-    
-    // Check collision (throttled for performance)
+    // Check collision
     const collision = this.collisionSystem.checkCollision('player', newPosition)
     
     if (collision.hasCollision) {
-      // Resolve collision
-      this.position.copy(collision.correctedPosition)
+      // Handle collision
+      this.state.position.copy(collision.correctedPosition)
       
-      // Stop downward velocity if we hit ground
-      if (collision.normal.y > 0.7) { // Surface is mostly horizontal
-        this.velocity.y = Math.max(0, this.velocity.y)
-        this.onGround = true
-        
-        // Debug: Log successful ground collision
-        if (Math.random() < 0.01) { // 1% chance per frame
-          logger.debug(LogModule.PLAYER, `Ground collision: corrected position=(${this.position.x.toFixed(2)}, ${this.position.y.toFixed(2)}, ${this.position.z.toFixed(2)})`)
-        }
+      // Check if we're on ground
+      const groundHeight = this.collisionSystem.getGroundHeight(this.state.position.x, this.state.position.z)
+      this.state.onGround = Math.abs(this.state.position.y - groundHeight) < this.config.groundCheckDistance
+      
+      // Reset vertical velocity if on ground
+      if (this.state.onGround && this.state.velocity.y < 0) {
+        this.state.velocity.y = 0
       }
+      
+      logger.debug(LogModule.PLAYER, `Collision: corrected to (${this.state.position.x.toFixed(2)}, ${this.state.position.y.toFixed(2)}, ${this.state.position.z.toFixed(2)})`)
     } else {
-      // No collision, apply movement
-      this.position.copy(newPosition)
-      this.onGround = false
+      // No collision, update position
+      this.state.position.copy(newPosition)
       
-      // Debug: Log no collision occasionally
-      if (Math.random() < 0.01) { // 1% chance per frame
-        logger.debug(LogModule.PLAYER, `No collision: new position=(${this.position.x.toFixed(2)}, ${this.position.y.toFixed(2)}, ${this.position.z.toFixed(2)})`)
-      }
+      // Check if we're on ground
+      const groundHeight = this.collisionSystem.getGroundHeight(this.state.position.x, this.state.position.z)
+      this.state.onGround = Math.abs(this.state.position.y - groundHeight) < this.config.groundCheckDistance
     }
     
-    // Update collision volume position
-    this.collisionVolume.position.copy(this.position)
+    // Update collision volume
+    this.collisionVolume.position.copy(this.state.position)
   }
 
   private updateVisuals(): void {
-    // Update player mesh position
-    this.playerMesh.position.copy(this.position)
+    // Update mesh position (offset down from eye level)
+    const meshPosition = this.state.position.clone()
+    meshPosition.y -= this.config.height / 2
+    this.mesh.position.copy(meshPosition)
     
-    // Update debug wireframe position
+    // Update debug wireframe
     if (this.debugWireframe) {
-      this.debugWireframe.position.copy(this.position)
+      this.debugWireframe.position.copy(this.state.position)
     }
   }
 
   private updateCamera(): void {
-    // Update camera manager with player position
-    this.cameraManager.setPlayerPosition(this.position)
+    // Update camera position through camera manager
+    this.cameraManager.setPlayerPosition(this.state.position)
   }
 
   // ============================================================================
-  // DEBUG CONTROLS
+  // PUBLIC METHODS
   // ============================================================================
 
-  /**
-   * Toggle debug wireframe visibility
-   */
-  public setDebugVisible(visible: boolean): void {
-    this.isDebugVisible = visible
+  public setPosition(position: THREE.Vector3): void {
+    this.state.position.copy(position)
+    this.collisionVolume.position.copy(position)
     
+    // Update mesh position
+    const meshPosition = position.clone()
+    meshPosition.y -= this.config.height / 2
+    this.mesh.position.copy(meshPosition)
+    
+    // Update debug wireframe
     if (this.debugWireframe) {
-      this.debugWireframe.visible = visible
+      this.debugWireframe.position.copy(position)
     }
     
-    // Also control player mesh visibility based on debug mode
-    this.playerMesh.visible = visible
+    // Update camera
+    this.cameraManager.setPlayerPosition(position)
     
-    // console.log(`🎮 Player debug wireframe: ${visible ? 'visible' : 'hidden'}`)
+    logger.debug(LogModule.PLAYER, `Position set to (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`)
   }
 
-  /**
-   * Get debug wireframe visibility
-   */
-  public isDebugWireframeVisible(): boolean {
-    return this.isDebugVisible
-  }
-
-  // ============================================================================
-  // GETTERS AND SETTERS
-  // ============================================================================
-
-  /**
-   * Get player position
-   */
   public getPosition(): THREE.Vector3 {
-    return this.position.clone()
+    return this.state.position.clone()
   }
 
-  /**
-   * Set player position
-   */
-  public setPosition(position: THREE.Vector3): void {
-    this.position.copy(position)
-    this.updateVisuals()
-    this.updateCamera()
-  }
-
-  /**
-   * Get player velocity
-   */
   public getVelocity(): THREE.Vector3 {
-    return this.velocity.clone()
+    return this.state.velocity.clone()
   }
 
-  /**
-   * Get player mesh
-   */
   public getMesh(): THREE.Mesh {
-    return this.playerMesh
+    return this.mesh
   }
 
-  /**
-   * Get collision volume
-   */
   public getCollisionVolume(): CollisionVolume {
-    return { ...this.collisionVolume }
+    return this.collisionVolume
   }
 
-  /**
-   * Check if player is on ground
-   */
   public isOnGround(): boolean {
-    return this.onGround
+    return this.state.onGround
   }
 
-  /**
-   * Get player configuration
-   */
+  public isMoving(): boolean {
+    return this.state.isMoving
+  }
+
+  public isRunning(): boolean {
+    return this.state.isRunning
+  }
+
   public getConfig(): PlayerConfig {
     return { ...this.config }
   }
 
-  /**
-   * Update player configuration
-   */
   public updateConfig(config: Partial<PlayerConfig>): void {
     this.config = { ...this.config, ...config }
     
     // Update collision volume if dimensions changed
-    if (config.capsuleRadius !== undefined || config.capsuleHeight !== undefined) {
+    if (config.radius !== undefined || config.height !== undefined) {
       this.collisionVolume.dimensions.set(
-        this.config.capsuleRadius,
-        this.config.capsuleHeight,
+        this.config.radius,
+        this.config.height,
         0
       )
-      
-      // Recreate debug wireframe
-      if (this.debugWireframe) {
-        this.scene.remove(this.debugWireframe)
-        this.createDebugWireframe()
-        this.debugWireframe.visible = this.isDebugVisible
-      }
     }
+    
+    logger.debug(LogModule.PLAYER, 'Player config updated')
   }
 
-  // ============================================================================
-  // UTILITY METHODS
-  // ============================================================================
+  public setDebugVisible(visible: boolean): void {
+    this.isDebugVisible = visible
+    if (this.debugWireframe) {
+      this.debugWireframe.visible = visible
+    }
+    logger.debug(LogModule.PLAYER, `Debug wireframe ${visible ? 'shown' : 'hidden'}`)
+  }
 
-  /**
-   * Get player status for debugging
-   */
+  public isDebugWireframeVisible(): boolean {
+    return this.isDebugVisible
+  }
+
   public getStatus(): object {
     return {
-      position: this.position.toArray(),
-      velocity: this.velocity.toArray(),
-      onGround: this.onGround,
-      debugVisible: this.isDebugVisible,
-      movementInput: { ...this.movementInput },
-      config: { ...this.config }
+      position: this.state.position.toArray(),
+      velocity: this.state.velocity.toArray(),
+      onGround: this.state.onGround,
+      canJump: this.state.canJump,
+      isMoving: this.state.isMoving,
+      isRunning: this.state.isRunning,
+      input: { ...this.input },
+      config: this.getConfig()
     }
   }
 
-  /**
-   * Dispose of player controller resources
-   */
   public dispose(): void {
     // Remove from collision system
     this.collisionSystem.unregisterObject('player')
     
     // Remove from scene
-    this.scene.remove(this.playerMesh)
+    this.scene.remove(this.mesh)
     if (this.debugWireframe) {
       this.scene.remove(this.debugWireframe)
     }
     
     // Remove event listeners
-    document.removeEventListener('keydown', this.onKeyDown.bind(this))
-    document.removeEventListener('keyup', this.onKeyUp.bind(this))
+    document.removeEventListener('keydown', this.boundKeyDown)
+    document.removeEventListener('keyup', this.boundKeyUp)
     
-    // console.log('🎮 PlayerController disposed')
+    // Dispose geometries and materials
+    this.mesh.geometry.dispose()
+    if (Array.isArray(this.mesh.material)) {
+      this.mesh.material.forEach(mat => mat.dispose())
+    } else {
+      this.mesh.material.dispose()
+    }
+    
+    logger.info(LogModule.PLAYER, 'PlayerController disposed')
   }
 } 

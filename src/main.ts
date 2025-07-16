@@ -14,6 +14,7 @@ import { CameraManager } from './systems/CameraManager'
 import { PlayerController } from './systems/PlayerController'
 import { ParameterManager } from './systems/ParameterManager'
 import { ParameterGUI } from './systems/ParameterGUI'
+import { ParameterIntegration } from './systems/ParameterIntegration'
 import { logger, LogModule, LogLevel } from './systems/Logger'
 import { performanceMonitor } from './systems/PerformanceMonitor'
 import { DebugGUIManager } from './systems/DebugGUIManager'
@@ -329,6 +330,7 @@ class LandSystem {
   private landPieces: LandPiece[] = []
   private scene: THREE.Scene
   private landUniforms: { [key: string]: { value: any } }
+  private collisionSystem?: CollisionSystem
 
   constructor(scene: THREE.Scene) {
     this.scene = scene
@@ -465,6 +467,12 @@ class LandSystem {
     // Store land piece
     this.landPieces.push(landPiece)
 
+    // Update collision system with new land piece
+    if (this.collisionSystem) {
+      const landMeshes = this.landPieces.map(piece => piece.mesh)
+      this.collisionSystem.registerLandMeshes(landMeshes)
+    }
+
     console.log(`🏔️ Land piece created: ${type} (${id}) - receiveShadow=true, invisible shadow caster added`)
     return landPiece
   }
@@ -474,16 +482,35 @@ class LandSystem {
     this.landUniforms.uTime.value = time * 0.001
   }
 
+  /**
+   * Set collision system reference for automatic updates
+   */
+  public setCollisionSystem(collisionSystem: CollisionSystem): void {
+    this.collisionSystem = collisionSystem
+  }
+
   public setElevation(elevation: number): void {
     this.landUniforms.uElevation.value = elevation
+    // Refresh collision system when terrain height changes
+    if (this.collisionSystem) {
+      this.collisionSystem.refreshLandMeshes()
+    }
   }
 
   public setRoughness(roughness: number): void {
     this.landUniforms.uRoughness.value = roughness
+    // Refresh collision system when terrain roughness changes
+    if (this.collisionSystem) {
+      this.collisionSystem.refreshLandMeshes()
+    }
   }
 
   public setScale(scale: number): void {
     this.landUniforms.uScale.value = scale
+    // Refresh collision system when terrain scale changes
+    if (this.collisionSystem) {
+      this.collisionSystem.refreshLandMeshes()
+    }
   }
 
   public setLandColor(color: THREE.Color): void {
@@ -570,6 +597,11 @@ class LandSystem {
     })
     this.landPieces = []
     console.log('🏔️ All land pieces cleared')
+    
+    // Clear collision system land meshes when all land is cleared
+    if (this.collisionSystem) {
+      this.collisionSystem.registerLandMeshes([])
+    }
   }
 
   public setLandShadowCasting(enabled: boolean): void {
@@ -708,6 +740,7 @@ class IntegratedThreeJSApp {
   private playerController!: PlayerController
   private parameterManager!: ParameterManager
   private parameterGUI!: ParameterGUI
+  private parameterIntegration!: ParameterIntegration
   
   // Timing for delta time calculation
   private lastTime: number = 0
@@ -773,6 +806,7 @@ class IntegratedThreeJSApp {
       position: { top: '0px', right: '320px' },
       width: 300
     })
+    // Parameter integration will be initialized after all systems are created
     
     // Initialize player controller with collision system and camera manager
     this.playerController = new PlayerController(
@@ -780,12 +814,16 @@ class IntegratedThreeJSApp {
       this.collisionSystem, 
       this.cameraManager,
       {
-        position: new THREE.Vector3(0, 125, 0), // Increased Y position by 20 units
-        capsuleRadius: 0.5,
-        capsuleHeight: 2.0,
-        moveSpeed: 5.0,
-        jumpSpeed: 8.0,
-        gravity: 20.0
+        height: 1.8,
+        radius: 0.5,
+        mass: 70,
+        walkSpeed: 25.0,  // Increased for more responsive movement
+        runSpeed: 40.0,   // Increased for faster running
+        jumpForce: 15.0,  // Increased for higher jumps
+        gravity: 25.0,
+        groundCheckDistance: 0.1,
+        friction: 0.8,
+        airResistance: 0.95
       }
     )
     
@@ -808,6 +846,8 @@ class IntegratedThreeJSApp {
       animationSystem: this.animationSystem,
       configManager: this.configManager,
       collisionSystem: this.collisionSystem,
+      cameraManager: this.cameraManager,
+      playerController: this.playerController,
       oceanLODSystem: this.oceanLODSystem,
       landSystem: this.landSystem,
       deviceType: this.deviceType,
@@ -1094,6 +1134,9 @@ class IntegratedThreeJSApp {
       const landMeshes = this.landSystem.getLandPieces().map(piece => piece.mesh)
       this.collisionSystem.registerLandMeshes(landMeshes)
       
+      // Connect land system to collision system for automatic updates
+      this.landSystem.setCollisionSystem(this.collisionSystem)
+      
       // Debug: Log land mesh registration
       console.log(`🏔️ Registered ${landMeshes.length} land meshes with collision system:`)
       landMeshes.forEach((mesh, index) => {
@@ -1127,9 +1170,22 @@ class IntegratedThreeJSApp {
       // console.log('📷 No saved camera state found, using default position')
     }
     
+    // Initialize parameter integration after all systems are created
+    this.parameterIntegration = new ParameterIntegration(this.parameterManager, {
+      oceanSystem: this.oceanLODSystem,
+      landSystem: this.landSystem,
+      skySystem: this.sky,
+      lightingSystem: null, // Will be set after lighting is created
+      cameraManager: this.cameraManager,
+      playerController: this.playerController
+    })
+    
+    // Update all systems with current parameter values
+    this.parameterIntegration.updateAllSystems()
+    
     // Save current parameters as first state if no saved states exist
     if (this.parameterManager.getSavedStateNames().length === 0) {
-      this.parameterManager.saveState('initial', 'Initial application state')
+      this.parameterManager.saveState('initial')
       logger.info(LogModule.SYSTEM, 'Initial parameters saved as first state')
     }
     
@@ -1835,6 +1891,11 @@ class IntegratedThreeJSApp {
    * Dispose of the Parameter GUI
    */
   public dispose(): void {
+    // Dispose of Parameter Integration
+    if (this.parameterIntegration) {
+      this.parameterIntegration.dispose()
+    }
+    
     // Dispose of Parameter GUI
     if (this.parameterGUI) {
       this.parameterGUI.dispose()

@@ -119,6 +119,41 @@ export class CollisionSystem {
     }
   }
 
+  /**
+   * Refresh land meshes - update bounding boxes and clear cache
+   * Call this when land meshes are modified (position, scale, etc.)
+   */
+  public refreshLandMeshes(): void {
+    // Update bounding boxes for all registered land meshes
+    this.landMeshes.forEach(info => {
+      info.boundingBox.setFromObject(info.mesh)
+    })
+    
+    // Clear cache to force recalculation
+    this.groundHeightCache.clear()
+    
+    logger.info(LogModule.COLLISION, `Refreshed ${this.landMeshes.length} land meshes - updated bounding boxes and cleared cache`)
+  }
+
+  /**
+   * Update land mesh bounding boxes and cache
+   * Call this when land parameters change (elevation, roughness, etc.)
+   */
+  public updateLandMesh(meshId: string): void {
+    const landMeshInfo = this.landMeshes.find(info => info.mesh.userData.id === meshId)
+    if (landMeshInfo) {
+      // Update bounding box for this specific mesh
+      landMeshInfo.boundingBox.setFromObject(landMeshInfo.mesh)
+      
+      // Clear cache to force recalculation
+      this.groundHeightCache.clear()
+      
+      logger.debug(LogModule.COLLISION, `Updated land mesh: ${meshId} - refreshed bounding box and cleared cache`)
+    } else {
+      logger.warn(LogModule.COLLISION, `Land mesh not found for update: ${meshId}`)
+    }
+  }
+
   // ============================================================================
   // COLLISION DETECTION
   // ============================================================================
@@ -565,11 +600,23 @@ export class CollisionSystem {
     }
 
     let groundHeight = -4.0 // Default to sea level
+    let closestDistance = Infinity
+    let closestMesh = null
     
     // Check each land mesh's bounding box
     for (const info of this.landMeshes) {
       const mesh = info.mesh
       const boundingBox = info.boundingBox
+      
+      // Calculate distance to mesh center for better fallback
+      const center = new THREE.Vector3()
+      boundingBox.getCenter(center)
+      const distance = new THREE.Vector3(x, 0, z).distanceTo(new THREE.Vector3(center.x, 0, center.z))
+      
+      if (distance < closestDistance) {
+        closestDistance = distance
+        closestMesh = mesh
+      }
       
       // Check if point is within this mesh's X-Z bounds
       if (x >= boundingBox.min.x && x <= boundingBox.max.x &&
@@ -583,6 +630,16 @@ export class CollisionSystem {
         else {
           groundHeight = Math.max(groundHeight, boundingBox.min.y)
         }
+      }
+    }
+    
+    // If we're outside all bounds, use the closest mesh as reference
+    if (groundHeight === -4.0 && closestMesh) {
+      const boundingBox = this.landMeshes.find(info => info.mesh === closestMesh)?.boundingBox
+      if (boundingBox) {
+        // Use the mesh's Y position as a reasonable fallback
+        groundHeight = closestMesh.position.y
+        logger.debug(LogModule.COLLISION, `Using closest mesh fallback: ${closestMesh.userData.id} at Y=${groundHeight.toFixed(2)} (${closestDistance.toFixed(1)} units away)`)
       }
     }
     

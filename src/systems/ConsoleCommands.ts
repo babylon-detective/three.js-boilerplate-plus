@@ -5,6 +5,7 @@ import { ConfigManager } from './ConfigManager'
 import { logger, LogModule, LogLevel } from './Logger'
 import { performanceMonitor } from './PerformanceMonitor'
 
+
 // Interface for the main app reference
 interface AppReference {
   scene: THREE.Scene
@@ -15,12 +16,24 @@ interface AppReference {
   configManager: ConfigManager
   collisionSystem?: any
   playerController?: any
+  cameraManager?: any
   oceanLODSystem?: any
   landSystem?: any
   parameterManager?: any
   parameterGUI?: any
   deviceType: string
   inputMethods: string[]
+}
+
+// Interface for the main app reference (for static methods)
+interface IntegratedThreeJSApp {
+  getCollisionSystem(): any
+  getPlayerStatus(): any
+  setPlayerPosition(x: number, y: number, z: number): void
+  togglePlayerDebug(): void
+  testCollisionAtPlayerPosition(): void
+  testPlayerCollision(): void
+  testCollisionAtPosition(x: number, y: number, z: number): void
 }
 
 export class ConsoleCommands {
@@ -578,6 +591,8 @@ export class ConsoleCommands {
 - testPlayerCollision()            - Test collision at player position
 - getCollisionStatus()             - Show collision system status
 - showLandMeshes()                 - Show registered land meshes
+- showLandBounds()                 - Show land mesh bounds and player position analysis
+- movePlayerToSafePosition()       - Move player to safe position within land bounds
 
 🔧 PARAMETER MANAGEMENT:
 - showParameters()                 - Show parameter management status
@@ -699,7 +714,14 @@ export class ConsoleCommands {
     win.testCollisionAtOrigin = () => this.testCollisionAtOrigin()
     win.testCollisionPerformance = () => this.testCollisionPerformance()
     win.testPlayerMovement = () => this.testPlayerMovement()
+    win.testParameterGUI = () => this.testParameterGUI()
+    win.testParameterIntegration = () => this.testParameterIntegration()
+    win.debugCameraPlayerPosition = () => this.debugCameraPlayerPosition()
     win.showLandMeshes = () => this.showLandMeshes()
+    win.showLandBounds = () => ConsoleCommands.showLandBounds()
+    win.movePlayerToSafePosition = () => ConsoleCommands.movePlayerToSafePosition()
+    win.refreshCollisionSystem = () => this.refreshCollisionSystem()
+    win.checkPlayerSpeeds = () => this.checkPlayerSpeeds()
     
     // Parameter Management Commands
     win.showParameters = () => this.showParameters()
@@ -899,6 +921,221 @@ export class ConsoleCommands {
     console.groupEnd()
   }
 
+  /**
+   * Show land mesh bounds and player position for collision debugging
+   */
+  public static showLandBounds(): void {
+    const app = (window as any).threeJSApp as IntegratedThreeJSApp
+    if (!app) {
+      console.error('❌ Three.js app not found')
+      return
+    }
+
+    const collisionSystem = app.getCollisionSystem()
+    if (!collisionSystem) {
+      console.error('❌ Collision system not found')
+      return
+    }
+
+    const landMeshes = collisionSystem.getLandMeshes()
+    const playerPosition = app.getPlayerStatus ? app.getPlayerStatus() : null
+
+    console.group('🗺️ Land Mesh Bounds Analysis')
+    console.log(`📍 Player Position: ${playerPosition ? `(${playerPosition.x?.toFixed(1)}, ${playerPosition.y?.toFixed(1)}, ${playerPosition.z?.toFixed(1)})` : 'Unknown'}`)
+    console.log(`🏔️ Registered Land Meshes: ${landMeshes.length}`)
+    
+    if (landMeshes.length === 0) {
+      console.warn('⚠️ No land meshes registered!')
+      console.groupEnd()
+      return
+    }
+
+    landMeshes.forEach((info: any, index: number) => {
+      const mesh = info.mesh
+      const bbox = info.boundingBox
+      const center = new THREE.Vector3()
+      bbox.getCenter(center)
+      const size = new THREE.Vector3()
+      bbox.getSize(size)
+      
+      console.group(`🏔️ Land Mesh ${index}: ${mesh.userData.id}`)
+      console.log(`   Type: ${mesh.userData.type}/${mesh.userData.landType}`)
+      console.log(`   Position: (${mesh.position.x.toFixed(1)}, ${mesh.position.y.toFixed(1)}, ${mesh.position.z.toFixed(1)})`)
+      console.log(`   Bounds: X[${bbox.min.x.toFixed(1)}, ${bbox.max.x.toFixed(1)}], Y[${bbox.min.y.toFixed(1)}, ${bbox.max.y.toFixed(1)}], Z[${bbox.min.z.toFixed(1)}, ${bbox.max.z.toFixed(1)}]`)
+      console.log(`   Size: ${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)}`)
+      console.log(`   Priority: ${info.priority}`)
+      
+      // Check if player is within bounds
+      if (playerPosition) {
+        const isInBounds = bbox.containsPoint(new THREE.Vector3(playerPosition.x, playerPosition.y, playerPosition.z))
+        console.log(`   Player in bounds: ${isInBounds ? '✅ YES' : '❌ NO'}`)
+        
+        if (!isInBounds) {
+          const distance = new THREE.Vector3(playerPosition.x, playerPosition.y, playerPosition.z).distanceTo(center)
+          console.log(`   Distance to center: ${distance.toFixed(1)} units`)
+        }
+      }
+      console.groupEnd()
+    })
+
+    // Overall analysis
+    if (playerPosition) {
+      let closestMesh: any = null
+      let closestDistance = Infinity
+      
+      landMeshes.forEach((info: any) => {
+        const center = new THREE.Vector3()
+        info.boundingBox.getCenter(center)
+        const distance = new THREE.Vector3(playerPosition.x, playerPosition.y, playerPosition.z).distanceTo(center)
+        if (distance < closestDistance) {
+          closestDistance = distance
+          closestMesh = info
+        }
+      })
+      
+      console.group('📊 Analysis')
+      console.log(`🎯 Closest land mesh: ${closestMesh?.mesh.userData.id} (${closestDistance.toFixed(1)} units away)`)
+      
+      if (closestDistance > 100) {
+        console.warn('⚠️ Player is very far from any land mesh - this will cause collision issues!')
+        console.log('💡 Try moving the player closer to the land or expanding the land area')
+      } else if (closestDistance > 50) {
+        console.warn('⚠️ Player is moderately far from land meshes')
+      } else {
+        console.log('✅ Player is reasonably close to land meshes')
+      }
+      console.groupEnd()
+    }
+    
+    console.groupEnd()
+  }
+
+  /**
+   * Move player to a safe position within land bounds
+   */
+  public static movePlayerToSafePosition(): void {
+    const app = (window as any).threeJSApp as IntegratedThreeJSApp
+    if (!app) {
+      console.error('❌ Three.js app not found')
+      return
+    }
+
+    const collisionSystem = app.getCollisionSystem()
+    if (!collisionSystem) {
+      console.error('❌ Collision system not found')
+      return
+    }
+
+    const landMeshes = collisionSystem.getLandMeshes()
+    if (landMeshes.length === 0) {
+      console.error('❌ No land meshes available')
+      return
+    }
+
+    // Find the main terrain (highest priority or largest)
+    let mainTerrain = landMeshes[0]
+    for (const info of landMeshes) {
+      if (info.mesh.userData.id === 'main-terrain' || info.priority > mainTerrain.priority) {
+        mainTerrain = info
+        break
+      }
+    }
+
+    const bbox = mainTerrain.boundingBox
+    const center = new THREE.Vector3()
+    bbox.getCenter(center)
+    
+    // Move player to center of main terrain, slightly above ground
+    const safeX = center.x
+    const safeZ = center.z
+    const safeY = Math.max(bbox.max.y + 2, 10) // At least 2 units above ground, minimum 10 units up
+    
+    app.setPlayerPosition(safeX, safeY, safeZ)
+    
+    console.log(`🎯 Moved player to safe position: (${safeX.toFixed(1)}, ${safeY.toFixed(1)}, ${safeZ.toFixed(1)})`)
+    console.log(`📍 This is the center of ${mainTerrain.mesh.userData.id}`)
+    console.log(`💡 Use showLandBounds() to verify the player is now within collision range`)
+  }
+
+  /**
+   * Refresh collision system land meshes
+   */
+  public refreshCollisionSystem(): void {
+    console.group('🔄 Refreshing Collision System')
+    
+    if (!this.app.collisionSystem) {
+      console.log('❌ Collision system not available')
+      console.groupEnd()
+      return
+    }
+
+    if (!this.app.landSystem) {
+      console.log('❌ Land system not available')
+      console.groupEnd()
+      return
+    }
+
+    // Get current land meshes
+    const landPieces = this.app.landSystem.getLandPieces()
+    const landMeshes = landPieces.map((piece: any) => piece.mesh)
+    
+    console.log(`🏔️ Refreshing collision system with ${landMeshes.length} land meshes`)
+    
+    // Re-register land meshes with collision system
+    this.app.collisionSystem.registerLandMeshes(landMeshes)
+    
+    // Test collision at player position
+    if (this.app.playerController) {
+      const playerPosition = this.app.playerController.getPosition()
+      console.log(`🧪 Testing collision at player position: (${playerPosition.x.toFixed(1)}, ${playerPosition.y.toFixed(1)}, ${playerPosition.z.toFixed(1)})`)
+      this.app.collisionSystem.debugCollisionTest(playerPosition)
+    }
+    
+    console.log('✅ Collision system refreshed successfully')
+    console.groupEnd()
+  }
+
+  /**
+   * Check current player movement speeds
+   */
+  public checkPlayerSpeeds(): void {
+    console.group('🏃 Player Movement Speeds')
+    
+    if (!this.app.playerController) {
+      console.log('❌ Player controller not available')
+      console.groupEnd()
+      return
+    }
+
+    const config = this.app.playerController.getConfig()
+    console.log(`🚶 Walk Speed: ${config.walkSpeed} units/s`)
+    console.log(`🏃 Run Speed: ${config.runSpeed} units/s`)
+    console.log(`🦘 Jump Force: ${config.jumpForce} units/s`)
+    console.log(`🌍 Gravity: ${config.gravity} units/s²`)
+    
+    // Also check parameter manager values
+    if (this.app.parameterManager) {
+      const paramWalkSpeed = this.app.parameterManager.getParameter('player', 'walkSpeed')
+      const paramRunSpeed = this.app.parameterManager.getParameter('player', 'runSpeed')
+      const paramJumpForce = this.app.parameterManager.getParameter('player', 'jumpForce')
+      
+      console.log(`📊 Parameter Manager Values:`)
+      console.log(`  Walk Speed: ${paramWalkSpeed} units/s`)
+      console.log(`  Run Speed: ${paramRunSpeed} units/s`)
+      console.log(`  Jump Force: ${paramJumpForce} units/s`)
+      
+      // Check if there's a mismatch
+      if (config.walkSpeed !== paramWalkSpeed || config.runSpeed !== paramRunSpeed || config.jumpForce !== paramJumpForce) {
+        console.warn('⚠️ Mismatch between PlayerController and ParameterManager values!')
+        console.log('💡 This might be causing the slow movement issue.')
+      } else {
+        console.log('✅ PlayerController and ParameterManager values match')
+      }
+    }
+    
+    console.groupEnd()
+  }
+
   public showParameters(): void {
     console.group('🔧 Parameter Management System')
     
@@ -1088,14 +1325,24 @@ export class ConsoleCommands {
       return
     }
     
+    console.group('🎮 Player Movement Test')
+    
+    // Test new player system
+    const status = this.app.playerController.getStatus()
+    console.log('Player Status:', status)
+    
     const position = this.app.playerController.getPosition()
     const velocity = this.app.playerController.getVelocity()
     const onGround = this.app.playerController.isOnGround()
+    const isMoving = this.app.playerController.isMoving()
     
-    console.group('🎮 Player Movement Test')
     console.log(`Current Position: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`)
     console.log(`Current Velocity: (${velocity.x.toFixed(2)}, ${velocity.y.toFixed(2)}, ${velocity.z.toFixed(2)})`)
     console.log(`On Ground: ${onGround}`)
+    console.log(`Moving: ${isMoving}`)
+    
+    // Test input state
+    console.log('Input State:', status.input)
     
     // Test collision at current position
     console.log('Testing collision at current position...')
@@ -1106,6 +1353,153 @@ export class ConsoleCommands {
     testPosition.y -= 1
     console.log('Testing collision 1 unit below current position...')
     this.app.collisionSystem.debugCollisionTest(testPosition)
+    
+    // Test input system
+    console.log('Testing input system...')
+    console.log('Press W, A, S, D to move')
+    console.log('Press Space to jump')
+    console.log('Press Shift to run')
+    
+    // Enable debug wireframe
+    this.app.playerController.setDebugVisible(true)
+    console.log('Debug wireframe enabled')
+    
+    // Test manual movement
+    console.log('Testing manual movement...')
+    const testMovePosition = position.clone()
+    testMovePosition.x += 1
+    this.app.playerController.setPosition(testMovePosition)
+    console.log(`Moved player to (${testMovePosition.x.toFixed(2)}, ${testMovePosition.y.toFixed(2)}, ${testMovePosition.z.toFixed(2)})`)
+    
+    console.groupEnd()
+  }
+
+  /**
+   * Test parameter GUI functionality
+   */
+  public testParameterGUI(): void {
+    if (!this.app.parameterManager) {
+      console.warn('❌ Parameter manager not available')
+      return
+    }
+    
+    console.group('🎛️ Parameter GUI Test')
+    
+    // Test setting a parameter
+    console.log('Testing parameter setting...')
+    const testValue = Math.random() * 2
+    this.app.parameterManager.setParameter('ocean', 'amplitude', testValue, 'test_setting')
+    console.log(`Set ocean.amplitude to ${testValue}`)
+    
+    // Verify the parameter was set
+    const retrievedValue = this.app.parameterManager.getParameter('ocean', 'amplitude')
+    console.log(`Retrieved ocean.amplitude: ${retrievedValue}`)
+    
+    // Test getting all parameters for a category
+    const oceanParams = this.app.parameterManager.getCategoryParameters('ocean')
+    console.log(`Ocean parameters count: ${oceanParams.length}`)
+    
+    // Test parameter validation
+    console.log('Testing parameter validation...')
+    this.app.parameterManager.setParameter('ocean', 'amplitude', 5, 'test_validation') // Should be clamped to max
+    const clampedValue = this.app.parameterManager.getParameter('ocean', 'amplitude')
+    console.log(`After setting to 5 (should be clamped): ${clampedValue}`)
+    
+    // Reset to a reasonable value
+    this.app.parameterManager.setParameter('ocean', 'amplitude', 0.5, 'test_reset')
+    
+    console.groupEnd()
+  }
+
+  /**
+   * Test parameter integration with systems
+   */
+  public testParameterIntegration(): void {
+    if (!this.app.parameterManager) {
+      console.warn('❌ Parameter manager not available')
+      return
+    }
+    
+    console.group('🔗 Parameter Integration Test')
+    
+    // Test ocean parameter integration
+    console.log('Testing ocean parameter integration...')
+    const originalAmplitude = this.app.parameterManager.getParameter('ocean', 'amplitude')
+    const newAmplitude = 1.5
+    this.app.parameterManager.setParameter('ocean', 'amplitude', newAmplitude, 'integration_test')
+    console.log(`Ocean amplitude changed from ${originalAmplitude} to ${newAmplitude}`)
+    
+    // Test land parameter integration
+    console.log('Testing land parameter integration...')
+    const originalElevation = this.app.parameterManager.getParameter('land', 'elevation')
+    const newElevation = 10.0
+    this.app.parameterManager.setParameter('land', 'elevation', newElevation, 'integration_test')
+    console.log(`Land elevation changed from ${originalElevation} to ${newElevation}`)
+    
+    // Test player parameter integration
+    console.log('Testing player parameter integration...')
+    const originalWalkSpeed = this.app.parameterManager.getParameter('player', 'walkSpeed')
+    const newWalkSpeed = 12.0
+    this.app.parameterManager.setParameter('player', 'walkSpeed', newWalkSpeed, 'integration_test')
+    console.log(`Player walk speed changed from ${originalWalkSpeed} to ${newWalkSpeed}`)
+    
+    // Reset parameters to reasonable values
+    setTimeout(() => {
+      this.app.parameterManager.setParameter('ocean', 'amplitude', originalAmplitude, 'integration_reset')
+      this.app.parameterManager.setParameter('land', 'elevation', originalElevation, 'integration_reset')
+      this.app.parameterManager.setParameter('player', 'walkSpeed', originalWalkSpeed, 'integration_reset')
+      console.log('✅ Parameters reset to original values')
+    }, 2000)
+    
+    console.groupEnd()
+  }
+
+  /**
+   * Debug camera and player positioning
+   */
+  public debugCameraPlayerPosition(): void {
+    if (!this.app.playerController || !this.app.cameraManager) {
+      console.warn('❌ Player controller or camera manager not available')
+      return
+    }
+    
+    console.group('📷 Camera & Player Position Debug')
+    
+    // Get player information
+    const playerPosition = this.app.playerController.getPosition()
+    const playerVelocity = this.app.playerController.getVelocity()
+    const playerMesh = this.app.playerController.getMesh()
+    const playerOnGround = this.app.playerController.isOnGround()
+    
+    // Get camera information
+    const cameraInfo = this.app.cameraManager.getCameraInfo()
+    const currentCamera = this.app.cameraManager.getCurrentCamera()
+    const currentMode = this.app.cameraManager.getCurrentMode()
+    
+    console.group('🎮 Player Information')
+    console.log(`Position: (${playerPosition.x.toFixed(2)}, ${playerPosition.y.toFixed(2)}, ${playerPosition.z.toFixed(2)})`)
+    console.log(`Velocity: (${playerVelocity.x.toFixed(2)}, ${playerVelocity.y.toFixed(2)}, ${playerVelocity.z.toFixed(2)})`)
+    console.log(`Mesh Position: (${playerMesh.position.x.toFixed(2)}, ${playerMesh.position.y.toFixed(2)}, ${playerMesh.position.z.toFixed(2)})`)
+    console.log(`On Ground: ${playerOnGround}`)
+    console.groupEnd()
+    
+    console.group('📷 Camera Information')
+    console.log(`Current Mode: ${currentMode}`)
+    console.log(`Camera Position: (${currentCamera.position.x.toFixed(2)}, ${currentCamera.position.y.toFixed(2)}, ${currentCamera.position.z.toFixed(2)})`)
+    console.log(`Camera Rotation: (${currentCamera.rotation.x.toFixed(3)}, ${currentCamera.rotation.y.toFixed(3)}, ${currentCamera.rotation.z.toFixed(3)})`)
+    console.log(`Is Transitioning: ${cameraInfo.isTransitioning}`)
+    console.groupEnd()
+    
+    // Calculate differences
+    const positionDiff = playerPosition.clone().sub(currentCamera.position)
+    const meshDiff = playerMesh.position.clone().sub(currentCamera.position)
+    
+    console.group('🔍 Position Analysis')
+    console.log(`Player to Camera Distance: ${positionDiff.length().toFixed(2)} units`)
+    console.log(`Mesh to Camera Distance: ${meshDiff.length().toFixed(2)} units`)
+    console.log(`Expected Camera Height: ${playerPosition.y + 1.6} (player Y + 1.6)`)
+    console.log(`Actual Camera Height: ${currentCamera.position.y}`)
+    console.groupEnd()
     
     console.groupEnd()
   }
