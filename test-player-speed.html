@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Player Speed Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #1a1a1a;
+            color: white;
+        }
+        .test-section {
+            background: #2a2a2a;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .speed-display {
+            font-size: 18px;
+            margin: 10px 0;
+        }
+        .warning {
+            color: #ff6b6b;
+            font-weight: bold;
+        }
+        .success {
+            color: #51cf66;
+        }
+        button {
+            background: #4a90e2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #357abd;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎮 Player Speed Configuration Test</h1>
+    
+    <div class="test-section">
+        <h2>📊 Current Speed Values</h2>
+        <div id="speed-display" class="speed-display">
+            Loading...
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h2>🔧 Test Commands</h2>
+        <button onclick="checkPlayerSpeeds()">Check Player Speeds</button>
+        <button onclick="testParameterManager()">Test Parameter Manager</button>
+        <button onclick="testPlayerController()">Test Player Controller</button>
+        <button onclick="syncParameters()">Sync Parameters</button>
+        <button onclick="setHighSpeed()">Set High Speed (500/800)</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>📝 Console Commands</h2>
+        <p>Open browser console (F12) and run these commands:</p>
+        <ul>
+            <li><code>checkPlayerSpeeds()</code> - Check current speeds</li>
+            <li><code>getPlayerStatus()</code> - Get player status</li>
+            <li><code>showParameters()</code> - Show parameter manager</li>
+            <li><code>setPlayerPosition(0, 10, 0)</code> - Move player to origin</li>
+        </ul>
+    </div>
+
+    <script type="module">
+        // Wait for the app to load
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                updateSpeedDisplay();
+            }, 2000);
+        });
+
+        function updateSpeedDisplay() {
+            const app = window.threeJSApp;
+            if (!app) {
+                document.getElementById('speed-display').innerHTML = 
+                    '<span class="warning">❌ Three.js app not found</span>';
+                return;
+            }
+
+            const playerController = app.playerController;
+            const parameterManager = app.parameterManager;
+
+            if (!playerController) {
+                document.getElementById('speed-display').innerHTML = 
+                    '<span class="warning">❌ Player controller not found</span>';
+                return;
+            }
+
+            const config = playerController.getConfig();
+            const paramWalkSpeed = parameterManager ? parameterManager.getParameter('player', 'walkSpeed') : 'N/A';
+            const paramRunSpeed = parameterManager ? parameterManager.getParameter('player', 'runSpeed') : 'N/A';
+
+            let html = `
+                <div class="success">✅ Three.js app found</div>
+                <div><strong>PlayerController Config:</strong></div>
+                <div>🚶 Walk Speed: ${config.walkSpeed} units/s</div>
+                <div>🏃 Run Speed: ${config.runSpeed} units/s</div>
+                <div>🦘 Jump Force: ${config.jumpForce} units/s</div>
+                <div>🌍 Gravity: ${config.gravity} units/s²</div>
+            `;
+
+            if (parameterManager) {
+                html += `
+                    <div><strong>ParameterManager Values:</strong></div>
+                    <div>🚶 Walk Speed: ${paramWalkSpeed} units/s</div>
+                    <div>🏃 Run Speed: ${paramRunSpeed} units/s</div>
+                `;
+
+                if (config.walkSpeed !== paramWalkSpeed || config.runSpeed !== paramRunSpeed) {
+                    html += '<div class="warning">⚠️ MISMATCH: PlayerController and ParameterManager values differ!</div>';
+                } else {
+                    html += '<div class="success">✅ Values match between systems</div>';
+                }
+            }
+
+            document.getElementById('speed-display').innerHTML = html;
+        }
+
+        // Global functions for testing
+        window.checkPlayerSpeeds = () => {
+            const app = window.threeJSApp;
+            if (app && app.consoleCommands) {
+                app.consoleCommands.checkPlayerSpeeds();
+            } else {
+                console.log('❌ Console commands not available');
+            }
+        };
+
+        window.testParameterManager = () => {
+            const app = window.threeJSApp;
+            if (app && app.parameterManager) {
+                console.group('📊 Parameter Manager Test');
+                console.log('Walk Speed:', app.parameterManager.getParameter('player', 'walkSpeed'));
+                console.log('Run Speed:', app.parameterManager.getParameter('player', 'runSpeed'));
+                console.groupEnd();
+            } else {
+                console.log('❌ Parameter manager not available');
+            }
+        };
+
+        window.testPlayerController = () => {
+            const app = window.threeJSApp;
+            if (app && app.playerController) {
+                console.group('🎮 Player Controller Test');
+                const config = app.playerController.getConfig();
+                console.log('Config:', config);
+                console.groupEnd();
+            } else {
+                console.log('❌ Player controller not available');
+            }
+        };
+
+        window.syncParameters = () => {
+            const app = window.threeJSApp;
+            if (app && app.parameterIntegration) {
+                console.log('🔄 Syncing parameters...');
+                app.parameterIntegration.updateAllSystems();
+                console.log('✅ Parameters synced');
+                updateSpeedDisplay();
+            } else {
+                console.log('❌ Parameter integration not available');
+            }
+        };
+
+        window.setHighSpeed = () => {
+            const app = window.threeJSApp;
+            if (app && app.playerController) {
+                console.log('🚀 Setting high speeds...');
+                app.playerController.updateConfig({
+                    walkSpeed: 500,
+                    runSpeed: 800
+                });
+                console.log('✅ High speeds set');
+                updateSpeedDisplay();
+            } else {
+                console.log('❌ Player controller not available');
+            }
+        };
+
+        // Auto-refresh display
+        setInterval(updateSpeedDisplay, 5000);
+    </script>
+</body>
+</html> 

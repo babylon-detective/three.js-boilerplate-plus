@@ -478,13 +478,13 @@ export class DebugGUIManager {
     const configFolder = playerFolder.addFolder('Configuration')
     const config = this.systems.playerController.getConfig()
     
-    configFolder.add({ walkSpeed: config.walkSpeed }, 'walkSpeed', 1, 50, 0.5)
+    configFolder.add({ walkSpeed: config.walkSpeed }, 'walkSpeed', 1, 500, 0.5)
       .name('Walk Speed')
       .onChange((value: number) => {
         this.systems.playerController.updateConfig({ walkSpeed: value })
       })
     
-    configFolder.add({ runSpeed: config.runSpeed }, 'runSpeed', 5, 80, 0.5)
+    configFolder.add({ runSpeed: config.runSpeed }, 'runSpeed', 5, 800, 0.5)
       .name('Run Speed')
       .onChange((value: number) => {
         this.systems.playerController.updateConfig({ runSpeed: value })

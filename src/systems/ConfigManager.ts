@@ -206,7 +206,7 @@ export class ConfigManager {
     // Add to history
     this.addToHistory(action, { [section]: updates })
 
-    console.log(`🔧 Config updated: ${section}`, updates)
+    // console.log(`🔧 Config updated: ${section}`, updates)
   }
 
   // ============================================================================
@@ -227,7 +227,7 @@ export class ConfigManager {
       // Create backup
       localStorage.setItem(STORAGE_KEYS.BACKUP_CONFIG, JSON.stringify(configToSave))
       
-      console.log('💾 User configuration saved')
+      // console.log('💾 User configuration saved')
     } catch (error) {
       console.error('❌ Failed to save user configuration:', error)
     }
@@ -241,7 +241,7 @@ export class ConfigManager {
       const saved = localStorage.getItem(STORAGE_KEYS.USER_CONFIG)
       if (saved) {
         this.userConfig = JSON.parse(saved)
-        console.log('📂 User configuration loaded')
+        // console.log('📂 User configuration loaded')
       }
     } catch (error) {
       console.error('❌ Failed to load user configuration:', error)
@@ -257,7 +257,7 @@ export class ConfigManager {
       const backup = localStorage.getItem(STORAGE_KEYS.BACKUP_CONFIG)
       if (backup) {
         this.userConfig = JSON.parse(backup)
-        console.log('🔄 Backup configuration loaded')
+        // console.log('🔄 Backup configuration loaded')
       }
     } catch (error) {
       console.error('❌ Failed to load backup configuration:', error)
@@ -318,7 +318,7 @@ export class ConfigManager {
     delete this.userConfig[section]
     this.saveUserConfig()
     this.addToHistory(`reset_${section}`, { [section]: DEFAULT_CONFIGS[section] })
-    console.log(`🔄 Reset ${section} to defaults`)
+    // console.log(`🔄 Reset ${section} to defaults`)
   }
 
   /**
@@ -328,7 +328,7 @@ export class ConfigManager {
     this.userConfig = {}
     this.saveUserConfig()
     this.addToHistory('reset_all', this.getDefaultConfig())
-    console.log('🔄 All configuration reset to defaults')
+    // console.log('🔄 All configuration reset to defaults')
   }
 
   /**
@@ -355,7 +355,7 @@ export class ConfigManager {
         this.userConfig = importData.userOverrides
         this.saveUserConfig()
         this.addToHistory('import_config', importData.userOverrides)
-        console.log('📥 Configuration imported successfully')
+        // console.log('📥 Configuration imported successfully')
         return true
       }
       
@@ -400,7 +400,7 @@ export class ConfigManager {
     localStorage.removeItem(STORAGE_KEYS.CONFIG_HISTORY)
     this.userConfig = {}
     this.configHistory = []
-    console.log('🧹 All configuration data cleared')
+    // console.log('🧹 All configuration data cleared')
   }
 
   /**

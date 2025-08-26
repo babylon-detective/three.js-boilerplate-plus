@@ -5,109 +5,132 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Collision System Test</title>
     <style>
-        body {
-            margin: 0;
-            padding: 20px;
-            font-family: Arial, sans-serif;
-            background: #1a1a1a;
-            color: #fff;
-        }
-        .test-panel {
-            position: fixed;
-            top: 20px;
-            left: 20px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 20px;
-            border-radius: 10px;
-            z-index: 1000;
-        }
-        button {
-            background: #4a90e2;
-            color: white;
-            border: none;
-            padding: 10px 15px;
-            margin: 5px;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #357abd;
-        }
-        .status {
-            margin-top: 10px;
-            padding: 10px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 5px;
-        }
+        body { margin: 0; padding: 20px; font-family: monospace; background: #1a1a1a; color: #fff; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #333; border-radius: 5px; }
+        .success { border-color: #4CAF50; background: #1a2e1a; }
+        .error { border-color: #f44336; background: #2e1a1a; }
+        .warning { border-color: #ff9800; background: #2e2a1a; }
+        button { margin: 5px; padding: 10px; background: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        button:hover { background: #45a049; }
+        .log { background: #000; padding: 10px; border-radius: 3px; max-height: 300px; overflow-y: auto; font-size: 12px; }
     </style>
 </head>
 <body>
-    <div class="test-panel">
-        <h3>🧪 Collision System Test</h3>
-        <button onclick="testCollisionAtOrigin()">Test Origin Collision</button>
-        <button onclick="testPlayerCollision()">Test Player Collision</button>
-        <button onclick="showLandMeshes()">Show Land Meshes</button>
-        <button onclick="getCollisionStatus()">Get Collision Status</button>
-        <button onclick="testPlayerMovement()">Test Player Movement</button>
-        <div class="status" id="status">Ready to test collision system...</div>
+    <h1>🏔️ Land Collision System Test</h1>
+    
+    <div class="test-section">
+        <h3>🧪 Test Commands</h3>
+        <button onclick="testLandCollision()">Test Land Collision</button>
+        <button onclick="testGroundDetection()">Test Ground Detection</button>
+        <button onclick="showLandBounds()">Show Land Bounds</button>
+        <button onclick="refreshCollisionSystem()">Refresh Collision System</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+
+    <div class="test-section">
+        <h3>📊 Test Results</h3>
+        <div id="results"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>📝 Console Log</h3>
+        <div id="log" class="log"></div>
     </div>
 
     <script>
-        function updateStatus(message) {
-            document.getElementById('status').textContent = message;
-            console.log(message);
+        // Intercept console.log to capture output
+        const originalLog = console.log;
+        const originalWarn = console.warn;
+        const originalError = console.error;
+        
+        function addToLog(type, ...args) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            const message = args.map(arg => 
+                typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+            ).join(' ');
+            
+            const logEntry = document.createElement('div');
+            logEntry.style.color = type === 'error' ? '#f44336' : type === 'warn' ? '#ff9800' : '#4CAF50';
+            logEntry.textContent = `[${timestamp}] ${type.toUpperCase()}: ${message}`;
+            logDiv.appendChild(logEntry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        console.log = (...args) => {
+            originalLog(...args);
+            addToLog('log', ...args);
+        };
+        
+        console.warn = (...args) => {
+            originalWarn(...args);
+            addToLog('warn', ...args);
+        };
+        
+        console.error = (...args) => {
+            originalError(...args);
+            addToLog('error', ...args);
+        };
+
+        function updateResults(content, className = '') {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = content;
+            resultsDiv.className = className;
         }
 
-        function testCollisionAtOrigin() {
-            updateStatus('Testing collision at origin (0, 10, 0)...');
-            if (window.threeJSApp) {
-                window.threeJSApp.testCollisionAtPosition(0, 10, 0);
+        function testLandCollision() {
+            if (window.testLandCollision) {
+                window.testLandCollision();
+                updateResults('✅ Land collision test executed. Check console for results.', 'success');
             } else {
-                updateStatus('❌ App not available');
+                updateResults('❌ testLandCollision function not available. Make sure the app is loaded.', 'error');
             }
         }
 
-        function testPlayerCollision() {
-            updateStatus('Testing player collision...');
-            if (window.testPlayerCollision) {
-                window.testPlayerCollision();
+        function testGroundDetection() {
+            if (window.testGroundDetection) {
+                window.testGroundDetection();
+                updateResults('✅ Ground detection test executed. Check console for results.', 'success');
             } else {
-                updateStatus('❌ Player collision test not available');
+                updateResults('❌ testGroundDetection function not available. Make sure the app is loaded.', 'error');
             }
         }
 
-        function showLandMeshes() {
-            updateStatus('Showing land meshes...');
-            if (window.showLandMeshes) {
-                window.showLandMeshes();
+        function showLandBounds() {
+            if (window.showLandBounds) {
+                window.showLandBounds();
+                updateResults('✅ Land bounds test executed. Check console for results.', 'success');
             } else {
-                updateStatus('❌ Show land meshes not available');
+                updateResults('❌ showLandBounds function not available. Make sure the app is loaded.', 'error');
             }
         }
 
-        function getCollisionStatus() {
-            updateStatus('Getting collision status...');
-            if (window.getCollisionStatus) {
-                window.getCollisionStatus();
+        function refreshCollisionSystem() {
+            if (window.refreshCollisionSystem) {
+                window.refreshCollisionSystem();
+                updateResults('✅ Collision system refresh executed. Check console for results.', 'success');
             } else {
-                updateStatus('❌ Get collision status not available');
+                updateResults('❌ refreshCollisionSystem function not available. Make sure the app is loaded.', 'error');
             }
         }
 
-        function testPlayerMovement() {
-            updateStatus('Testing player movement...');
-            if (window.testPlayerMovement) {
-                window.testPlayerMovement();
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+            updateResults('✅ Log cleared.', 'success');
+        }
+
+        // Auto-detect when app is loaded
+        function checkAppLoaded() {
+            if (window.testLandCollision && window.testGroundDetection) {
+                updateResults('✅ App loaded successfully! All test functions are available.', 'success');
             } else {
-                updateStatus('❌ Player movement test not available');
+                updateResults('⏳ Waiting for app to load...', 'warning');
+                setTimeout(checkAppLoaded, 1000);
             }
         }
 
-        // Auto-test after page loads
-        setTimeout(() => {
-            updateStatus('Auto-testing collision system...');
-            testCollisionAtOrigin();
-        }, 2000);
+        // Start checking
+        checkAppLoaded();
     </script>
 </body>
 </html> 

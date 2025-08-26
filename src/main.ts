@@ -467,11 +467,8 @@ class LandSystem {
     // Store land piece
     this.landPieces.push(landPiece)
 
-    // Update collision system with new land piece
-    if (this.collisionSystem) {
-      const landMeshes = this.landPieces.map(piece => piece.mesh)
-      this.collisionSystem.registerLandMeshes(landMeshes)
-    }
+    // Note: Land meshes are now registered centrally in createContent() method
+    // This ensures proper initialization order and avoids duplicate registration
 
     console.log(`🏔️ Land piece created: ${type} (${id}) - receiveShadow=true, invisible shadow caster added`)
     return landPiece
@@ -809,23 +806,23 @@ class IntegratedThreeJSApp {
     // Parameter integration will be initialized after all systems are created
     
     // Initialize player controller with collision system and camera manager
-    this.playerController = new PlayerController(
-      this.scene, 
-      this.collisionSystem, 
-      this.cameraManager,
-      {
-        height: 1.8,
-        radius: 0.5,
-        mass: 70,
-        walkSpeed: 25.0,  // Increased for more responsive movement
-        runSpeed: 40.0,   // Increased for faster running
-        jumpForce: 15.0,  // Increased for higher jumps
-        gravity: 25.0,
-        groundCheckDistance: 0.1,
-        friction: 0.8,
-        airResistance: 0.95
-      }
-    )
+          this.playerController = new PlayerController(
+        this.scene, 
+        this.collisionSystem, 
+        this.cameraManager,
+        {
+          height: 1.8,
+          radius: 0.5,
+          mass: 70,
+          walkSpeed: 250.0,  // 10x faster (was 25.0)
+          runSpeed: 400.0,   // 10x faster (was 40.0)
+          jumpForce: 15.0,  // Increased for higher jumps
+          gravity: 8.0,      // CRITICAL FIX: Reduced from 25.0 to 8.0 for better collision detection
+          groundCheckDistance: 0.1,
+          friction: 0.8,
+          airResistance: 0.95
+        }
+      )
     
     // Register camera with ObjectManager for persistence
     this.objectManager.registerCamera(this.camera, this.controls)
@@ -1127,15 +1124,18 @@ class IntegratedThreeJSApp {
     this.addLighting()
     this.createSkySystem()
     await this.createOceanSystem()
+    
+    // Create land system first
     await this.createLandSystem()
     
-    // Register land meshes with collision system
+    // CRITICAL FIX: Connect collision system to land system AFTER creation
     if (this.landSystem) {
+      this.landSystem.setCollisionSystem(this.collisionSystem)
+      console.log('🏔️ Collision system connected to land system AFTER creation')
+      
+      // Register land meshes with collision system
       const landMeshes = this.landSystem.getLandPieces().map(piece => piece.mesh)
       this.collisionSystem.registerLandMeshes(landMeshes)
-      
-      // Connect land system to collision system for automatic updates
-      this.landSystem.setCollisionSystem(this.collisionSystem)
       
       // Debug: Log land mesh registration
       console.log(`🏔️ Registered ${landMeshes.length} land meshes with collision system:`)
@@ -1148,6 +1148,12 @@ class IntegratedThreeJSApp {
         console.log('🧪 Testing collision at origin (0, 10, 0)...')
         this.collisionSystem.debugCollisionTest(new THREE.Vector3(0, 10, 0))
       }, 1000)
+      
+      // Also test at ground level
+      setTimeout(() => {
+        console.log('🧪 Testing collision at ground level (0, 0, 0)...')
+        this.collisionSystem.debugCollisionTest(new THREE.Vector3(0, 0, 0))
+      }, 1500)
     }
     
     // Set up camera switching controls
@@ -1182,6 +1188,17 @@ class IntegratedThreeJSApp {
     
     // Update all systems with current parameter values
     this.parameterIntegration.updateAllSystems()
+    
+    // Force sync player speeds from ParameterManager to PlayerController
+    const walkSpeed = this.parameterManager.getParameter('player', 'walkSpeed')
+    const runSpeed = this.parameterManager.getParameter('player', 'runSpeed')
+    if (walkSpeed !== null && runSpeed !== null) {
+      this.playerController.updateConfig({
+        walkSpeed: walkSpeed,
+        runSpeed: runSpeed
+      })
+      // logger.info(LogModule.SYSTEM, `Player speeds synced: walk=${walkSpeed}, run=${runSpeed}`)
+    }
     
     // Save current parameters as first state if no saved states exist
     if (this.parameterManager.getSavedStateNames().length === 0) {
@@ -1567,7 +1584,10 @@ class IntegratedThreeJSApp {
         segments: 32
       })
 
-              // console.log('🏔️ Land system initialized')
+      // Note: Land meshes will be registered with collision system in createContent() method
+      // This ensures proper initialization order
+
+      // console.log('🏔️ Land system initialized')
 
     } catch (error) {
       // console.error('❌ Failed to create land system:', error)
@@ -1948,6 +1968,9 @@ const app = new IntegratedThreeJSApp(
 
 // Make it available globally for debugging
 ;(window as any).threeJSApp = app
+;(window as any).debugLandMeshes = () => app.getCollisionSystem().debugLandMeshes()
+;(window as any).debugTerrainHeight = (x: number = 0, z: number = 0) => app.getCollisionSystem().debugTerrainHeight(x, z)
+;(window as any).getTerrainHeight = (x: number = 0, z: number = 0) => app.getCollisionSystem().getTerrainHeight(x, z)
 
 // Register debug methods globally
 ;(window as any).testPlayerCollision = () => app.testPlayerCollision()

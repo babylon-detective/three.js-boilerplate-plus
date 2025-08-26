@@ -72,21 +72,34 @@ export class CollisionSystem {
   }
 
   public registerLandMeshes(meshes: THREE.Mesh[]): void {
+    console.log(`🏔️ CollisionSystem.registerLandMeshes() called with ${meshes.length} meshes`)
+    
     // Filter out ocean meshes - only register actual land terrain
     const landMeshes = meshes.filter(mesh => {
       const userData = mesh.userData
-      // Only include meshes that are explicitly marked as land
-      return userData.type === 'land' || 
-             userData.landType === 'plane' || 
-             userData.landType === 'box' || 
-             userData.landType === 'sphere' ||
-             userData.landType === 'cylinder'
+      // Include meshes that are explicitly marked as land
+      const isLand = userData.type === 'land' || 
+                     userData.landType === 'plane' || 
+                     userData.landType === 'box' || 
+                     userData.landType === 'sphere' ||
+                     userData.landType === 'cylinder'
+      
+      // Debug: Log what we're filtering (reduced frequency)
+      if (Math.random() < 0.3) { // 30% chance to avoid spam
+        console.log(`🏔️ Mesh ${userData.id}: type=${userData.type}, landType=${userData.landType}, isLand=${isLand}`)
+      }
+      
+      return isLand
     })
     
     // Create optimized land mesh info with bounding boxes and priorities
     this.landMeshes = landMeshes.map(mesh => {
       const boundingBox = new THREE.Box3().setFromObject(mesh)
       let priority = 1
+      
+      // Store mesh info for debugging (one-time log)
+      const size = boundingBox.getSize(new THREE.Vector3())
+      console.log(`🏔️ Land mesh: ${mesh.userData.id} at (${mesh.position.x.toFixed(1)}, ${mesh.position.y.toFixed(1)}, ${mesh.position.z.toFixed(1)}) size: ${size.x.toFixed(1)}x${size.z.toFixed(1)}`)
       
       // Prioritize main terrain (usually at origin)
       if (mesh.userData.id === 'main-terrain') {
@@ -224,28 +237,50 @@ export class CollisionSystem {
   }
 
   /**
-   * Check capsule collision with land (highly optimized)
+   * Check capsule collision with land (improved with proper mesh collision)
    */
   private checkCapsuleLandCollision(volume: CollisionVolume, position: THREE.Vector3): CollisionResult {
     const radius = volume.dimensions.x
     const height = volume.dimensions.y
     const halfHeight = height * 0.5
 
-    // Only check center point for performance - this is sufficient for most cases
-    const centerPoint = new THREE.Vector3(position.x, position.y - halfHeight + radius, position.z)
-    
-    // Get ground height at center point
-    const groundHeight = this.getGroundHeightOptimized(centerPoint.x, centerPoint.z)
-    const penetration = groundHeight - (centerPoint.y - radius)
+    // Check multiple points along the capsule for better collision detection
+    const checkPoints = [
+      // Top of capsule
+      new THREE.Vector3(position.x, position.y + halfHeight - radius, position.z),
+      // Center of capsule
+      new THREE.Vector3(position.x, position.y, position.z),
+      // Bottom of capsule
+      new THREE.Vector3(position.x, position.y - halfHeight + radius, position.z),
+      // Sides of capsule (for wall collisions)
+      new THREE.Vector3(position.x + radius, position.y, position.z),
+      new THREE.Vector3(position.x - radius, position.y, position.z),
+      new THREE.Vector3(position.x, position.y, position.z + radius),
+      new THREE.Vector3(position.x, position.y, position.z - radius)
+    ]
 
-    if (penetration > 0) {
+    let maxPenetration = 0
+    let collisionNormal = new THREE.Vector3(0, 1, 0)
+    let hasAnyCollision = false
+
+    // Check each point for collision with land meshes
+    for (const checkPoint of checkPoints) {
+      const collision = this.checkPointCollision(checkPoint, radius)
+      if (collision.hasCollision && collision.penetrationDepth > maxPenetration) {
+        maxPenetration = collision.penetrationDepth
+        collisionNormal = collision.normal
+        hasAnyCollision = true
+      }
+    }
+
+    if (hasAnyCollision) {
       const correctedPosition = position.clone()
-      correctedPosition.y += penetration + 0.01 // Add small offset to prevent sticking
+      correctedPosition.add(collisionNormal.clone().multiplyScalar(maxPenetration + 0.01))
 
       return {
         hasCollision: true,
-        penetrationDepth: penetration,
-        normal: new THREE.Vector3(0, 1, 0), // Simplified normal calculation
+        penetrationDepth: maxPenetration,
+        normal: collisionNormal,
         correctedPosition
       }
     }
@@ -256,6 +291,82 @@ export class CollisionSystem {
       normal: new THREE.Vector3(0, 1, 0),
       correctedPosition: position.clone()
     }
+  }
+
+  /**
+   * Check if a point collides with any land mesh
+   */
+  private checkPointCollision(point: THREE.Vector3, radius: number): CollisionResult {
+    if (this.landMeshes.length === 0) {
+      return {
+        hasCollision: false,
+        penetrationDepth: 0,
+        normal: new THREE.Vector3(0, 1, 0),
+        correctedPosition: point.clone()
+      }
+    }
+
+    // First, try to get ground height using the existing method
+    const groundHeight = this.getGroundHeightOptimized(point.x, point.z)
+    
+    // CRITICAL FIX: Check if point is below ground + radius (proper sphere collision)
+    if (point.y < groundHeight + radius) {
+      const penetration = (groundHeight + radius) - point.y
+      const correctedPosition = point.clone()
+      correctedPosition.y = groundHeight + radius // Set absolute position at ground level
+      
+      // Debug: Log collision correction (rare)
+      if (Math.random() < 0.001) { // 0.1% chance
+        console.log(`🔧 COLLISION FIX: Point at Y=${point.y.toFixed(2)} below ground+radius=${(groundHeight + radius).toFixed(2)}, correcting to Y=${correctedPosition.y.toFixed(2)}`)
+      }
+      
+      return {
+        hasCollision: true,
+        penetrationDepth: penetration,
+        normal: new THREE.Vector3(0, 1, 0),
+        correctedPosition
+      }
+    }
+
+    // Also try raycasting in multiple directions for wall collisions
+    const rayDirections = [
+      new THREE.Vector3(1, 0, 0),   // Right
+      new THREE.Vector3(-1, 0, 0),  // Left
+      new THREE.Vector3(0, 0, 1),   // Forward
+      new THREE.Vector3(0, 0, -1),  // Back
+      new THREE.Vector3(0, 1, 0)    // Up
+    ]
+
+    let closestCollision = {
+      hasCollision: false,
+      penetrationDepth: 0,
+      normal: new THREE.Vector3(0, 1, 0),
+      correctedPosition: point.clone()
+    }
+
+    const allMeshes = this.landMeshes.map(info => info.mesh)
+
+    for (const direction of rayDirections) {
+      this.raycaster.set(point, direction)
+      const intersects = this.raycaster.intersectObjects(allMeshes, true)
+
+      for (const intersect of intersects) {
+        const distance = intersect.distance
+        if (distance <= radius) {
+          const penetration = radius - distance
+          if (penetration > closestCollision.penetrationDepth) {
+            closestCollision = {
+              hasCollision: true,
+              penetrationDepth: penetration,
+              normal: intersect.face ? intersect.face.normal.clone().applyQuaternion(intersect.object.getWorldQuaternion(new THREE.Quaternion())) : direction.clone(),
+              correctedPosition: point.clone().add(direction.clone().multiplyScalar(penetration))
+            }
+          }
+        }
+      }
+    }
+
+    return closestCollision
   }
 
   /**
@@ -297,7 +408,7 @@ export class CollisionSystem {
 
     if (penetration > 0) {
       const correctedPosition = position.clone()
-      correctedPosition.y += penetration
+      correctedPosition.y = groundHeight + radius // CRITICAL FIX: Set absolute position at ground level
 
       return {
         hasCollision: true,
@@ -334,89 +445,40 @@ export class CollisionSystem {
   // ============================================================================
 
   /**
-   * Get ground height with intelligent LOD and spatial optimization
+   * Get ground height using simple modular approach (like ocean collision)
    */
   private getGroundHeightOptimized(x: number, z: number): number {
-    const now = performance.now()
-    
-    // Create cache key (rounded to reduce cache entries)
-    const cacheKey = `${Math.round(x * 5) / 5},${Math.round(z * 5) / 5}` // Coarser cache grid
-    
-    // Check cache first
-    const cached = this.groundHeightCache.get(cacheKey)
-    if (cached && (now - cached.timestamp) < this.cacheTimeout) {
-      return cached.height
+    if (this.landMeshes.length === 0) {
+      return -4.0
     }
 
-    // For now, use ALL land meshes to ensure accuracy
-    // TODO: Re-implement spatial optimization once basic collision works
-    const allMeshes = this.landMeshes.map(info => info.mesh)
+    let maxGroundHeight = -4.0 // Start with sea level
     
-    if (allMeshes.length === 0) {
-      const defaultHeight = -4.0
-      logger.warn(LogModule.COLLISION, `No land meshes available, using default height: ${defaultHeight}`)
-      return defaultHeight
-    }
-
-    // Cast ray from high above down to the ground
-    this.raycaster.set(
-      new THREE.Vector3(x, 1000, z),
-      new THREE.Vector3(0, -1, 0)
-    )
-
-    // Use recursive raycasting to account for mesh transformations
-    const intersects = this.raycaster.intersectObjects(allMeshes, true)
-    
-    let groundHeight = -4.0 // Default to sea level if no intersection
-    
-    if (intersects.length > 0) {
-      groundHeight = intersects[0].point.y
-      logger.debug(LogModule.COLLISION, `Found ground height at (${x.toFixed(1)}, ${z.toFixed(1)}): ${groundHeight.toFixed(2)} from ${intersects.length} intersections`)
+    // Check each land mesh to see if point is within its bounds
+    for (const info of this.landMeshes) {
+      const mesh = info.mesh
+      const boundingBox = info.boundingBox
       
-      // Debug: Log the first intersection details
-      if (Math.random() < 0.01) { // 1% chance per frame to avoid spam
-        const firstIntersect = intersects[0]
-        logger.debug(LogModule.COLLISION, `Intersection details: mesh=${firstIntersect.object.userData.id}, point=(${firstIntersect.point.x.toFixed(2)}, ${firstIntersect.point.y.toFixed(2)}, ${firstIntersect.point.z.toFixed(2)})`)
-      }
-    } else {
-      logger.warn(LogModule.COLLISION, `No raycast intersections at (${x.toFixed(1)}, ${z.toFixed(1)}) with ${allMeshes.length} land meshes`)
-      
-      // Use fallback method when raycasting fails
-      groundHeight = this.getGroundHeightFallback(x, z)
-      logger.debug(LogModule.COLLISION, `Using fallback method, ground height: ${groundHeight.toFixed(2)}`)
-      
-      // Debug: Log mesh details when no intersection found
-      if (Math.random() < 0.01) { // 1% chance per frame
-        logger.debug(LogModule.COLLISION, `Available land meshes:`)
-        allMeshes.forEach((mesh, index) => {
-          logger.debug(LogModule.COLLISION, `  ${index}: ${mesh.userData.id} at (${mesh.position.x.toFixed(1)}, ${mesh.position.y.toFixed(1)}, ${mesh.position.z.toFixed(1)})`)
-        })
+      // Check if point is within this mesh's X-Z bounds
+      if (x >= boundingBox.min.x && x <= boundingBox.max.x &&
+          z >= boundingBox.min.z && z <= boundingBox.max.z) {
         
-        // Try a different approach - check if the point is within any mesh's bounding box
-        logger.debug(LogModule.COLLISION, `Checking bounding boxes for point (${x.toFixed(1)}, ${z.toFixed(1)}):`)
-        this.landMeshes.forEach((info, index) => {
-          const mesh = info.mesh
-          const boundingBox = info.boundingBox
-          const isInside = boundingBox.containsPoint(new THREE.Vector3(x, 0, z))
-          logger.debug(LogModule.COLLISION, `  ${index}: ${mesh.userData.id} - inside bbox: ${isInside}, bbox: ${boundingBox.min.x.toFixed(1)} to ${boundingBox.max.x.toFixed(1)}, ${boundingBox.min.z.toFixed(1)} to ${boundingBox.max.z.toFixed(1)}`)
-        })
+        // For plane meshes, need to account for shader displacement
+        if (mesh.userData.landType === 'plane') {
+          const terrainHeight = this.calculateShaderTerrainHeight(mesh, x, z)
+          maxGroundHeight = Math.max(maxGroundHeight, terrainHeight)
+        }
+        // For box/sphere/cylinder, use top of bounding box
+        else {
+          maxGroundHeight = Math.max(maxGroundHeight, boundingBox.max.y)
+        }
+        
+        // Debug: Log successful collision (disabled - use debugTerrainHeight() for testing)
+        // console.log(`🏔️ LAND COLLISION: Point (${x.toFixed(1)}, ${z.toFixed(1)}) inside ${mesh.userData.id}, height=${maxGroundHeight.toFixed(2)}`)
       }
     }
-
-    // Cache the result
-    this.groundHeightCache.set(cacheKey, {
-      x: Math.round(x * 5) / 5,
-      z: Math.round(z * 5) / 5,
-      height: groundHeight,
-      timestamp: now
-    })
-
-    // Clean up old cache entries periodically
-    if (this.groundHeightCache.size > 500) { // Reduced cache size
-      this.cleanupCache()
-    }
-
-    return groundHeight
+    
+    return maxGroundHeight
   }
 
   /**
@@ -639,7 +701,7 @@ export class CollisionSystem {
       if (boundingBox) {
         // Use the mesh's Y position as a reasonable fallback
         groundHeight = closestMesh.position.y
-        logger.debug(LogModule.COLLISION, `Using closest mesh fallback: ${closestMesh.userData.id} at Y=${groundHeight.toFixed(2)} (${closestDistance.toFixed(1)} units away)`)
+        // logger.debug(LogModule.COLLISION, `Using closest mesh fallback: ${closestMesh.userData.id} at Y=${groundHeight.toFixed(2)} (${closestDistance.toFixed(1)} units away)`)
       }
     }
     
@@ -650,33 +712,179 @@ export class CollisionSystem {
    * Debug method to test collision detection at a specific position
    */
   public debugCollisionTest(position: THREE.Vector3): void {
-    logger.info(LogModule.COLLISION, `=== Collision Debug Test at (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}) ===`)
+    console.log(`=== 🔍 COLLISION DEBUG TEST at (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}) ===`)
     
     // Test ground height detection
     const groundHeight = this.getGroundHeightOptimized(position.x, position.z)
-    logger.info(LogModule.COLLISION, `Ground height at (${position.x.toFixed(2)}, ${position.z.toFixed(2)}): ${groundHeight.toFixed(2)}`)
+    console.log(`Ground height: ${groundHeight.toFixed(2)}`)
     
-    // Test capsule collision
-    const capsuleVolume: CollisionVolume = {
-      type: 'capsule',
-      position: position.clone(),
-      rotation: new THREE.Euler(0, 0, 0),
-      dimensions: new THREE.Vector3(0.5, 2.0, 0) // Standard player capsule
-    }
-    
-    const collision = this.checkCapsuleLandCollision(capsuleVolume, position)
-    logger.info(LogModule.COLLISION, `Capsule collision result:`)
-    logger.info(LogModule.COLLISION, `  Has collision: ${collision.hasCollision}`)
-    logger.info(LogModule.COLLISION, `  Penetration depth: ${collision.penetrationDepth.toFixed(3)}`)
-    logger.info(LogModule.COLLISION, `  Normal: (${collision.normal.x.toFixed(3)}, ${collision.normal.y.toFixed(3)}, ${collision.normal.z.toFixed(3)})`)
-    logger.info(LogModule.COLLISION, `  Corrected position: (${collision.correctedPosition.x.toFixed(2)}, ${collision.correctedPosition.y.toFixed(2)}, ${collision.correctedPosition.z.toFixed(2)})`)
-    
-    // List all land meshes
-    logger.info(LogModule.COLLISION, `Registered land meshes (${this.landMeshes.length}):`)
+    // List all land meshes with their bounds
+    console.log(`Land meshes (${this.landMeshes.length}):`)
     this.landMeshes.forEach((info, index) => {
-      logger.info(LogModule.COLLISION, `  ${index}: ${info.mesh.userData.id} (${info.mesh.userData.type}) priority=${info.priority}`)
+      const bbox = info.boundingBox
+      const contains = position.x >= bbox.min.x && position.x <= bbox.max.x && 
+                      position.z >= bbox.min.z && position.z <= bbox.max.z
+      console.log(`  ${index}: ${info.mesh.userData.id} bounds: X(${bbox.min.x.toFixed(1)} to ${bbox.max.x.toFixed(1)}) Z(${bbox.min.z.toFixed(1)} to ${bbox.max.z.toFixed(1)}) contains: ${contains}`)
     })
     
-    logger.info(LogModule.COLLISION, `=== End Collision Debug Test ===`)
+    console.log(`=== End Debug Test ===`)
+  }
+
+  /**
+   * Simple debug method to check land mesh info
+   */
+  public debugLandMeshes(): void {
+    console.log(`🏔️ LAND MESHES DEBUG (${this.landMeshes.length} registered):`)
+    this.landMeshes.forEach((info, index) => {
+      const mesh = info.mesh
+      const bbox = info.boundingBox
+      const size = bbox.getSize(new THREE.Vector3())
+      console.log(`${index}: ${mesh.userData.id}`)
+      console.log(`  Position: (${mesh.position.x}, ${mesh.position.y}, ${mesh.position.z})`)
+      console.log(`  Size: ${size.x.toFixed(1)} x ${size.y.toFixed(1)} x ${size.z.toFixed(1)}`)
+      console.log(`  Bounds: X(${bbox.min.x.toFixed(1)} to ${bbox.max.x.toFixed(1)}) Z(${bbox.min.z.toFixed(1)} to ${bbox.max.z.toFixed(1)})`)
+      
+      // Show shader parameters if available
+      if (mesh.material instanceof THREE.ShaderMaterial && mesh.material.uniforms) {
+        const uniforms = mesh.material.uniforms
+        console.log(`  Shader Parameters:`)
+        if (uniforms.uElevation) console.log(`    Elevation: ${uniforms.uElevation.value}`)
+        if (uniforms.uRoughness) console.log(`    Roughness: ${uniforms.uRoughness.value}`)
+        if (uniforms.uScale) console.log(`    Scale: ${uniforms.uScale.value}`)
+        if (uniforms.uIslandRadius) console.log(`    Island Radius: ${uniforms.uIslandRadius.value}`)
+        if (uniforms.uCoastSmoothness) console.log(`    Coast Smoothness: ${uniforms.uCoastSmoothness.value}`)
+      }
+    })
+  }
+
+  // ============================================================================
+  // INTELLIGENT SHADER-BASED TERRAIN HEIGHT CALCULATION
+  // ============================================================================
+
+  /**
+   * Calculate terrain height at a specific point using shader parameters
+   * This intelligently replicates the vertex shader displacement calculation
+   */
+  private calculateShaderTerrainHeight(mesh: THREE.Mesh, worldX: number, worldZ: number): number {
+    const baseHeight = mesh.position.y
+    
+    // Check if this mesh uses shader-based displacement
+    if (!(mesh.material instanceof THREE.ShaderMaterial) || !mesh.material.uniforms) {
+      return baseHeight
+    }
+    
+    const uniforms = mesh.material.uniforms
+    
+    // Extract shader parameters with defaults
+    const elevation = uniforms.uElevation?.value || 0
+    const roughness = uniforms.uRoughness?.value || 1
+    const scale = uniforms.uScale?.value || 1
+    const islandRadius = uniforms.uIslandRadius?.value || 35
+    const coastSmoothness = uniforms.uCoastSmoothness?.value || 8
+    const seaLevel = uniforms.uSeaLevel?.value || -4
+    
+    // Convert world coordinates to local mesh coordinates
+    const localX = worldX - mesh.position.x
+    const localZ = worldZ - mesh.position.z
+    
+    // Calculate distance from center (for island-style terrain)
+    const distanceFromCenter = Math.sqrt(localX * localX + localZ * localZ)
+    
+    // Calculate base noise height (simplified noise approximation)
+    const noiseHeight = this.calculateTerrainNoise(localX * scale, localZ * scale, roughness)
+    
+    // Apply island mask (terrain falls off towards edges)
+    const islandMask = this.calculateIslandMask(distanceFromCenter, islandRadius, coastSmoothness)
+    
+    // Combine all height factors
+    let finalHeight = baseHeight + (noiseHeight * elevation * islandMask)
+    
+    // Ensure terrain doesn't go below sea level at edges
+    finalHeight = Math.max(finalHeight, seaLevel)
+    
+    return finalHeight
+  }
+
+  /**
+   * Simplified terrain noise calculation (approximates shader noise)
+   */
+  private calculateTerrainNoise(x: number, z: number, roughness: number): number {
+    // Multi-octave noise approximation
+    let height = 0
+    let amplitude = 1
+    let frequency = 0.01
+    
+    // 3 octaves of noise for terrain detail
+    for (let i = 0; i < 3; i++) {
+      // Simple pseudo-noise using sine/cosine (approximates GPU noise)
+      const noise1 = Math.sin(x * frequency) * Math.cos(z * frequency)
+      const noise2 = Math.sin(x * frequency * 2.1) * Math.cos(z * frequency * 1.9)
+      const noise3 = Math.sin(x * frequency * 4.3) * Math.cos(z * frequency * 3.7)
+      
+      const octaveNoise = (noise1 + noise2 * 0.5 + noise3 * 0.25) / 1.75
+      height += octaveNoise * amplitude * roughness
+      
+      amplitude *= 0.5
+      frequency *= 2
+    }
+    
+    // Normalize to 0-1 range
+    return Math.max(0, Math.min(1, (height + 1) * 0.5))
+  }
+
+  /**
+   * Calculate island mask (terrain falloff towards edges)
+   */
+  private calculateIslandMask(distanceFromCenter: number, islandRadius: number, coastSmoothness: number): number {
+    if (distanceFromCenter < islandRadius) {
+      return 1.0 // Full height inside island
+    }
+    
+    // Smooth falloff beyond island radius
+    const falloffDistance = distanceFromCenter - islandRadius
+    const falloffFactor = Math.exp(-falloffDistance / coastSmoothness)
+    
+    return Math.max(0, falloffFactor)
+  }
+
+  /**
+   * Get terrain height with intelligent shader parameter tracking
+   */
+  public getTerrainHeight(x: number, z: number): number {
+    return this.getGroundHeightOptimized(x, z)
+  }
+
+  /**
+   * Test terrain height calculation at a specific point
+   */
+  public debugTerrainHeight(x: number, z: number): void {
+    console.log(`🏔️ TERRAIN HEIGHT DEBUG at (${x.toFixed(2)}, ${z.toFixed(2)}):`)
+    
+    const groundHeight = this.getGroundHeightOptimized(x, z)
+    console.log(`  Final Ground Height: ${groundHeight.toFixed(2)}`)
+    
+    // Show breakdown for each land mesh
+    this.landMeshes.forEach((info, index) => {
+      const mesh = info.mesh
+      const boundingBox = info.boundingBox
+      
+      if (x >= boundingBox.min.x && x <= boundingBox.max.x &&
+          z >= boundingBox.min.z && z <= boundingBox.max.z) {
+        
+        if (mesh.userData.landType === 'plane') {
+          const shaderHeight = this.calculateShaderTerrainHeight(mesh, x, z)
+          console.log(`  ${mesh.userData.id}: shader height = ${shaderHeight.toFixed(2)}`)
+          
+          if (mesh.material instanceof THREE.ShaderMaterial && mesh.material.uniforms) {
+            const uniforms = mesh.material.uniforms
+            console.log(`    Elevation: ${uniforms.uElevation?.value || 0}`)
+            console.log(`    Roughness: ${uniforms.uRoughness?.value || 1}`)
+            console.log(`    Scale: ${uniforms.uScale?.value || 1}`)
+          }
+        } else {
+          console.log(`  ${mesh.userData.id}: bbox height = ${boundingBox.max.y.toFixed(2)}`)
+        }
+      }
+    })
   }
 } 

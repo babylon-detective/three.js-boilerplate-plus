@@ -580,6 +580,9 @@ export class ConsoleCommands {
 - setPlayerPosition(x, y, z)       - Set player position
 - getPlayerStatus()                - Show player status and config
 - togglePlayerDebug()              - Toggle player debug wireframe
+- checkPlayerSpeeds()              - Check current player speeds
+- syncPlayerSpeeds()               - Sync speeds from ParameterManager
+- diagnosePlayerIssues()           - Comprehensive player issue diagnosis
 
 🔍 COLLISION SYSTEM:
 - testCollision(x, y, z)           - Test collision at position
@@ -655,6 +658,47 @@ export class ConsoleCommands {
 `)
   }
 
+  public clearLocalStorage(): void {
+    console.log('🗑️ Clearing local storage...')
+    localStorage.clear()
+    console.log('✅ Local storage cleared. Refresh the page to reload with new defaults.')
+  }
+
+  public forceResetAndSync(): void {
+    console.group('🔄 Force Reset and Sync')
+    
+    // Clear local storage
+    console.log('🗑️ Clearing local storage...')
+    localStorage.clear()
+    
+    // Reset parameters to defaults
+    if (this.app.parameterManager) {
+      console.log('🔄 Resetting all parameters to defaults...')
+      this.app.parameterManager.resetAllToDefaults()
+    }
+    
+    // Sync player speeds
+    if (this.app.playerController && this.app.parameterManager) {
+      console.log('🔄 Syncing player speeds...')
+      const paramWalkSpeed = this.app.parameterManager.getParameter('player', 'walkSpeed')
+      const paramRunSpeed = this.app.parameterManager.getParameter('player', 'runSpeed')
+      
+      if (paramWalkSpeed !== null && paramRunSpeed !== null) {
+        this.app.playerController.updateConfig({
+          walkSpeed: paramWalkSpeed,
+          runSpeed: paramRunSpeed
+        })
+        
+        console.log(`✅ Player speeds synced:`)
+        console.log(`  Walk Speed: ${paramWalkSpeed} units/s`)
+        console.log(`  Run Speed: ${paramRunSpeed} units/s`)
+      }
+    }
+    
+    console.log('✅ Force reset complete! Refresh the page to apply changes.')
+    console.groupEnd()
+  }
+
   // ============================================================================
   // GLOBAL REGISTRATION
   // ============================================================================
@@ -722,6 +766,13 @@ export class ConsoleCommands {
     win.movePlayerToSafePosition = () => ConsoleCommands.movePlayerToSafePosition()
     win.refreshCollisionSystem = () => this.refreshCollisionSystem()
     win.checkPlayerSpeeds = () => this.checkPlayerSpeeds()
+    win.syncPlayerSpeeds = () => this.syncPlayerSpeeds()
+    win.diagnosePlayerIssues = () => this.diagnosePlayerIssues()
+    win.clearLocalStorage = () => this.clearLocalStorage()
+    win.forceResetAndSync = () => this.forceResetAndSync()
+    win.testLandCollision = () => this.testLandCollision()
+    win.testCollisionAtPosition = (x: number, y: number, z: number) => this.testCollisionAtPosition(x, y, z)
+    win.testGroundDetection = () => this.testGroundDetection()
     
     // Parameter Management Commands
     win.showParameters = () => this.showParameters()
@@ -1055,6 +1106,12 @@ export class ConsoleCommands {
     console.log(`🎯 Moved player to safe position: (${safeX.toFixed(1)}, ${safeY.toFixed(1)}, ${safeZ.toFixed(1)})`)
     console.log(`📍 This is the center of ${mainTerrain.mesh.userData.id}`)
     console.log(`💡 Use showLandBounds() to verify the player is now within collision range`)
+    
+    // Test collision at new position
+    setTimeout(() => {
+      console.log('🧪 Testing collision at new position...')
+      collisionSystem.debugCollisionTest(new THREE.Vector3(safeX, safeY, safeZ))
+    }, 500)
   }
 
   /**
@@ -1081,6 +1138,11 @@ export class ConsoleCommands {
     
     console.log(`🏔️ Refreshing collision system with ${landMeshes.length} land meshes`)
     
+    // Log each land mesh for debugging
+    landMeshes.forEach((mesh: THREE.Mesh, index: number) => {
+      console.log(`  ${index}: ${mesh.userData.id} (${mesh.userData.type}/${mesh.userData.landType}) at (${mesh.position.x.toFixed(1)}, ${mesh.position.y.toFixed(1)}, ${mesh.position.z.toFixed(1)})`)
+    })
+    
     // Re-register land meshes with collision system
     this.app.collisionSystem.registerLandMeshes(landMeshes)
     
@@ -1091,6 +1153,10 @@ export class ConsoleCommands {
       this.app.collisionSystem.debugCollisionTest(playerPosition)
     }
     
+    // Test collision at origin
+    console.log('🧪 Testing collision at origin (0, 10, 0)...')
+    this.app.collisionSystem.debugCollisionTest(new THREE.Vector3(0, 10, 0))
+    
     console.log('✅ Collision system refreshed successfully')
     console.groupEnd()
   }
@@ -1098,6 +1164,73 @@ export class ConsoleCommands {
   /**
    * Check current player movement speeds
    */
+  public diagnosePlayerIssues(): void {
+    console.group('🔍 Player Issues Diagnosis')
+    
+    // Check player controller
+    if (!this.app.playerController) {
+      console.log('❌ Player controller not available')
+      console.groupEnd()
+      return
+    }
+
+    // Check speeds
+    const config = this.app.playerController.getConfig()
+    console.log(`🚶 Walk Speed: ${config.walkSpeed} units/s`)
+    console.log(`🏃 Run Speed: ${config.runSpeed} units/s`)
+    
+    // Check current state
+    const position = this.app.playerController.getPosition()
+    const velocity = this.app.playerController.getVelocity()
+    const onGround = this.app.playerController.isOnGround()
+    const isMoving = this.app.playerController.isMoving()
+    const isRunning = this.app.playerController.isRunning()
+    
+    console.log(`🎮 Current State:`)
+    console.log(`  Position: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`)
+    console.log(`  Velocity: (${velocity.x.toFixed(2)}, ${velocity.y.toFixed(2)}, ${velocity.z.toFixed(2)})`)
+    console.log(`  On Ground: ${onGround}`)
+    console.log(`  Moving: ${isMoving}`)
+    console.log(`  Running: ${isRunning}`)
+    
+    // Check collision system
+    if (this.app.collisionSystem) {
+      const landMeshes = this.app.collisionSystem.getLandMeshes()
+      console.log(`🏔️ Land Meshes: ${landMeshes.length} registered`)
+      
+      if (landMeshes.length === 0) {
+        console.warn('⚠️ NO LAND MESHES REGISTERED! This is why player falls through land.')
+      } else {
+        landMeshes.forEach((info: any, index: number) => {
+          const mesh = info.mesh
+          console.log(`  ${index}: ${mesh.userData.id} (${mesh.userData.type}/${mesh.userData.landType}) at (${mesh.position.x.toFixed(1)}, ${mesh.position.y.toFixed(1)}, ${mesh.position.z.toFixed(1)})`)
+        })
+      }
+      
+      // Test collision at current position
+      console.log('🧪 Testing collision at current position...')
+      this.app.collisionSystem.debugCollisionTest(position)
+    } else {
+      console.log('❌ Collision system not available')
+    }
+    
+    // Check land system
+    if (this.app.landSystem) {
+      const landPieces = this.app.landSystem.getLandPieces()
+      console.log(`🏔️ Land System: ${landPieces.length} pieces`)
+      
+      landPieces.forEach((piece: any, index: number) => {
+        console.log(`  ${index}: ${piece.id} (${piece.type}) at (${piece.mesh.position.x.toFixed(1)}, ${piece.mesh.position.y.toFixed(1)}, ${piece.mesh.position.z.toFixed(1)})`)
+      })
+    } else {
+      console.log('❌ Land system not available')
+    }
+    
+    console.log('💡 Run refreshCollisionSystem() to re-register land meshes')
+    console.log('💡 Run testPlayerMovement() for detailed movement testing')
+    console.groupEnd()
+  }
+
   public checkPlayerSpeeds(): void {
     console.group('🏃 Player Movement Speeds')
     
@@ -1128,9 +1261,60 @@ export class ConsoleCommands {
       if (config.walkSpeed !== paramWalkSpeed || config.runSpeed !== paramRunSpeed || config.jumpForce !== paramJumpForce) {
         console.warn('⚠️ Mismatch between PlayerController and ParameterManager values!')
         console.log('💡 This might be causing the slow movement issue.')
+        console.log('💡 Run syncPlayerSpeeds() to fix this.')
       } else {
         console.log('✅ PlayerController and ParameterManager values match')
       }
+    }
+    
+    // Test current player state
+    const position = this.app.playerController.getPosition()
+    const velocity = this.app.playerController.getVelocity()
+    const onGround = this.app.playerController.isOnGround()
+    const isMoving = this.app.playerController.isMoving()
+    const isRunning = this.app.playerController.isRunning()
+    
+    console.log(`🎮 Current State:`)
+    console.log(`  Position: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`)
+    console.log(`  Velocity: (${velocity.x.toFixed(2)}, ${velocity.y.toFixed(2)}, ${velocity.z.toFixed(2)})`)
+    console.log(`  On Ground: ${onGround}`)
+    console.log(`  Moving: ${isMoving}`)
+    console.log(`  Running: ${isRunning}`)
+    
+    console.groupEnd()
+  }
+
+  public syncPlayerSpeeds(): void {
+    console.group('🔄 Syncing Player Speeds')
+    
+    if (!this.app.playerController || !this.app.parameterManager) {
+      console.log('❌ Player controller or parameter manager not available')
+      console.groupEnd()
+      return
+    }
+
+    const paramWalkSpeed = this.app.parameterManager.getParameter('player', 'walkSpeed')
+    const paramRunSpeed = this.app.parameterManager.getParameter('player', 'runSpeed')
+    
+    if (paramWalkSpeed !== null && paramRunSpeed !== null) {
+      this.app.playerController.updateConfig({
+        walkSpeed: paramWalkSpeed,
+        runSpeed: paramRunSpeed
+      })
+      
+      console.log(`✅ Player speeds synced from ParameterManager:`)
+      console.log(`  Walk Speed: ${paramWalkSpeed} units/s`)
+      console.log(`  Run Speed: ${paramRunSpeed} units/s`)
+      
+      // Verify the sync worked
+      const config = this.app.playerController.getConfig()
+      if (config.walkSpeed === paramWalkSpeed && config.runSpeed === paramRunSpeed) {
+        console.log('✅ Sync successful - values now match!')
+      } else {
+        console.warn('⚠️ Sync may have failed - values still differ')
+      }
+    } else {
+      console.error('❌ Could not get speed values from ParameterManager')
     }
     
     console.groupEnd()
@@ -1354,6 +1538,14 @@ export class ConsoleCommands {
     console.log('Testing collision 1 unit below current position...')
     this.app.collisionSystem.debugCollisionTest(testPosition)
     
+    // Test collision at origin (where main terrain should be)
+    console.log('Testing collision at origin (0, 10, 0)...')
+    this.app.collisionSystem.debugCollisionTest(new THREE.Vector3(0, 10, 0))
+    
+    // Test collision at origin ground level
+    console.log('Testing collision at origin ground level (0, 0, 0)...')
+    this.app.collisionSystem.debugCollisionTest(new THREE.Vector3(0, 0, 0))
+    
     // Test input system
     console.log('Testing input system...')
     console.log('Press W, A, S, D to move')
@@ -1500,6 +1692,148 @@ export class ConsoleCommands {
     console.log(`Expected Camera Height: ${playerPosition.y + 1.6} (player Y + 1.6)`)
     console.log(`Actual Camera Height: ${currentCamera.position.y}`)
     console.groupEnd()
+    
+    console.groupEnd()
+  }
+
+  public testLandCollision(): void {
+    console.group('🏔️ Land Collision Test')
+    
+    if (!this.app.collisionSystem) {
+      console.log('❌ Collision system not available')
+      console.groupEnd()
+      return
+    }
+
+    const landMeshes = this.app.collisionSystem.getLandMeshes()
+    console.log(`📊 Land meshes available: ${landMeshes.length}`)
+    
+    if (landMeshes.length === 0) {
+      console.warn('⚠️ No land meshes registered! This is why the player falls through!')
+      console.log('🔍 Debugging land mesh registration...')
+      
+      // Check if land system exists
+      if (this.app.landSystem) {
+        const landPieces = this.app.landSystem.getLandPieces()
+        console.log(`🏔️ Land system has ${landPieces.length} pieces:`)
+        landPieces.forEach((piece: any, index: number) => {
+          console.log(`  ${index}: ${piece.id} (${piece.type}) at (${piece.mesh.position.x.toFixed(1)}, ${piece.mesh.position.y.toFixed(1)}, ${piece.mesh.position.z.toFixed(1)})`)
+        })
+      } else {
+        console.log('❌ Land system not available!')
+      }
+      
+      console.groupEnd()
+      return
+    }
+
+    // Test positions
+    const testPositions = [
+      { name: 'Origin', pos: new THREE.Vector3(0, 0, 0) },
+      { name: 'Above Ground', pos: new THREE.Vector3(0, 5, 0) },
+      { name: 'Player Height', pos: new THREE.Vector3(0, 1.8, 0) },
+      { name: 'Hill Area', pos: new THREE.Vector3(30, 5, 30) },
+      { name: 'Rocky Area', pos: new THREE.Vector3(-40, 5, 20) }
+    ]
+
+    for (const test of testPositions) {
+      console.group(`🧪 Testing: ${test.name} at (${test.pos.x.toFixed(1)}, ${test.pos.y.toFixed(1)}, ${test.pos.z.toFixed(1)})`)
+      
+      // Test collision with player capsule
+      const collision = this.app.collisionSystem.checkCollision('player', test.pos)
+      console.log(`Collision: ${collision.hasCollision ? 'YES' : 'NO'}`)
+      if (collision.hasCollision) {
+        console.log(`  Penetration: ${collision.penetrationDepth.toFixed(3)}`)
+        console.log(`  Normal: (${collision.normal.x.toFixed(2)}, ${collision.normal.y.toFixed(2)}, ${collision.normal.z.toFixed(2)})`)
+        console.log(`  Corrected: (${collision.correctedPosition.x.toFixed(2)}, ${collision.correctedPosition.y.toFixed(2)}, ${collision.correctedPosition.z.toFixed(2)})`)
+      }
+      
+      console.groupEnd()
+    }
+
+    console.groupEnd()
+  }
+
+  public testCollisionAtPosition(x: number, y: number, z: number): void {
+    console.group(`🧪 Testing Collision at Position (${x}, ${y}, ${z})`)
+    
+    if (!this.app.collisionSystem) {
+      console.log('❌ Collision system not available')
+      console.groupEnd()
+      return
+    }
+
+    // Test collision with player capsule
+    const collision = this.app.collisionSystem.checkCollision('player', new THREE.Vector3(x, y, z))
+    console.log(`Collision: ${collision.hasCollision ? 'YES' : 'NO'}`)
+    if (collision.hasCollision) {
+      console.log(`  Penetration: ${collision.penetrationDepth.toFixed(3)}`)
+      console.log(`  Normal: (${collision.normal.x.toFixed(2)}, ${collision.normal.y.toFixed(2)}, ${collision.normal.z.toFixed(2)})`)
+      console.log(`  Corrected: (${collision.correctedPosition.x.toFixed(2)}, ${collision.correctedPosition.y.toFixed(2)}, ${collision.correctedPosition.z.toFixed(2)})`)
+    }
+
+    // Test ground height
+    const groundHeight = this.app.collisionSystem.getGroundHeight(x, z)
+    console.log(`Ground Height: ${groundHeight.toFixed(2)}`)
+    console.log(`Distance to Ground: ${(y - groundHeight).toFixed(2)}`)
+
+    // Test land meshes
+    const landMeshes = this.app.collisionSystem.getLandMeshes()
+    console.log(`Land Meshes: ${landMeshes.length}`)
+    
+    landMeshes.forEach((info: any, index: number) => {
+      const mesh = info.mesh
+      const bbox = info.boundingBox
+      const center = new THREE.Vector3()
+      bbox.getCenter(center)
+      const distance = new THREE.Vector3(x, y, z).distanceTo(center)
+      console.log(`  ${index}: ${mesh.userData.id} - distance: ${distance.toFixed(2)}`)
+    })
+
+    console.groupEnd()
+  }
+
+  public testGroundDetection(): void {
+    console.group('🌊 Ground Detection Test')
+    
+    if (!this.app.playerController) {
+      console.log('❌ Player controller not available')
+      console.groupEnd()
+      return
+    }
+    
+    // Test collision system directly
+    if (this.app.collisionSystem) {
+      console.log('🧪 Testing collision system directly...')
+      const testPos = new THREE.Vector3(0, 10, 0)
+      this.app.collisionSystem.debugCollisionTest(testPos)
+    }
+
+    const position = this.app.playerController.getPosition()
+    const velocity = this.app.playerController.getVelocity()
+    const onGround = this.app.playerController.isOnGround()
+    
+    console.log(`Current Position: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`)
+    console.log(`Current Velocity: (${velocity.x.toFixed(2)}, ${velocity.y.toFixed(2)}, ${velocity.z.toFixed(2)})`)
+    console.log(`On Ground: ${onGround}`)
+    
+    // Test ground height at current position
+    if (this.app.collisionSystem) {
+      const groundHeight = this.app.collisionSystem.getGroundHeight(position.x, position.z)
+      const playerBottomY = position.y - (1.8 / 2 - 0.5) // Player height/2 - radius
+      const distanceToGround = playerBottomY - groundHeight
+      
+      console.log(`Ground Height: ${groundHeight.toFixed(2)}`)
+      console.log(`Player Bottom Y: ${playerBottomY.toFixed(2)}`)
+      console.log(`Distance to Ground: ${distanceToGround.toFixed(2)}`)
+      console.log(`Ground Tolerance: ${0.6 * 2} (doubled from 0.6)`)
+      
+      if (distanceToGround <= 0.6 * 2 && velocity.y <= 0.5) {
+        console.log('✅ Should be on ground')
+      } else {
+        console.log('❌ Should not be on ground')
+      }
+    }
     
     console.groupEnd()
   }
