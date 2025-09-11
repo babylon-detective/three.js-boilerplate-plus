@@ -77,10 +77,11 @@ export class CollisionSystem {
     // Filter out ocean meshes - only register actual land terrain
     const landMeshes = meshes.filter(mesh => {
       const userData = mesh.userData
-      // Include meshes that are explicitly marked as land
+      // Include meshes that are explicitly marked as land or land-collision
       const isLand = userData.type === 'land' || 
+                     userData.type === 'land-collision' ||
                      userData.landType === 'plane' || 
-                     userData.landType === 'box' || 
+                     userData.landType === 'box' ||
                      userData.landType === 'sphere' ||
                      userData.landType === 'cylinder'
       
@@ -449,10 +450,11 @@ export class CollisionSystem {
    */
   private getGroundHeightOptimized(x: number, z: number): number {
     if (this.landMeshes.length === 0) {
-      return -4.0
+      console.warn(`⚠️ No land meshes registered! Player will sink. Falling back to ocean level (-2.0)`)
+      return -2.0 // Ocean surface level
     }
 
-    let maxGroundHeight = -4.0 // Start with sea level
+    let maxGroundHeight = -2.0 // Start with ocean surface level
     
     // Check each land mesh to see if point is within its bounds
     for (const info of this.landMeshes) {
@@ -796,11 +798,18 @@ export class CollisionSystem {
     // Apply island mask (terrain falls off towards edges)
     const islandMask = this.calculateIslandMask(distanceFromCenter, islandRadius, coastSmoothness)
     
-    // Combine all height factors
-    let finalHeight = baseHeight + (noiseHeight * elevation * islandMask)
+    // Combine all height factors with more realistic scaling
+    // CRITICAL FIX: Scale down the elevation effect to match visual appearance
+    const terrainDisplacement = noiseHeight * (elevation * 0.1) * islandMask // Scale elevation by 0.1
+    let finalHeight = baseHeight + terrainDisplacement
     
     // Ensure terrain doesn't go below sea level at edges
     finalHeight = Math.max(finalHeight, seaLevel)
+    
+    // Debug: Log terrain calculation (very rare)
+    if (Math.random() < 0.001) { // 0.1% chance
+      console.log(`🏔️ Terrain calc: base=${baseHeight.toFixed(2)}, noise=${noiseHeight.toFixed(2)}, elevation=${elevation}, displacement=${terrainDisplacement.toFixed(2)}, final=${finalHeight.toFixed(2)}`)
+    }
     
     return finalHeight
   }
@@ -872,14 +881,30 @@ export class CollisionSystem {
           z >= boundingBox.min.z && z <= boundingBox.max.z) {
         
         if (mesh.userData.landType === 'plane') {
-          const shaderHeight = this.calculateShaderTerrainHeight(mesh, x, z)
-          console.log(`  ${mesh.userData.id}: shader height = ${shaderHeight.toFixed(2)}`)
-          
+          // Force detailed calculation with debug output
+          const baseHeight = mesh.position.y
           if (mesh.material instanceof THREE.ShaderMaterial && mesh.material.uniforms) {
             const uniforms = mesh.material.uniforms
-            console.log(`    Elevation: ${uniforms.uElevation?.value || 0}`)
-            console.log(`    Roughness: ${uniforms.uRoughness?.value || 1}`)
-            console.log(`    Scale: ${uniforms.uScale?.value || 1}`)
+            const elevation = uniforms.uElevation?.value || 0
+            const roughness = uniforms.uRoughness?.value || 1
+            const scale = uniforms.uScale?.value || 1
+            
+            // Calculate detailed breakdown
+            const localX = x - mesh.position.x
+            const localZ = z - mesh.position.z
+            const distanceFromCenter = Math.sqrt(localX * localX + localZ * localZ)
+            const noiseHeight = this.calculateTerrainNoise(localX * scale, localZ * scale, roughness)
+            const islandMask = this.calculateIslandMask(distanceFromCenter, uniforms.uIslandRadius?.value || 35, uniforms.uCoastSmoothness?.value || 8)
+            const terrainDisplacement = noiseHeight * (elevation * 0.1) * islandMask
+            const finalHeight = Math.max(baseHeight + terrainDisplacement, uniforms.uSeaLevel?.value || -4)
+            
+            console.log(`  ${mesh.userData.id}: detailed calculation`)
+            console.log(`    Base Height: ${baseHeight.toFixed(2)}`)
+            console.log(`    Elevation Parameter: ${elevation}`)
+            console.log(`    Noise Height: ${noiseHeight.toFixed(3)}`)
+            console.log(`    Island Mask: ${islandMask.toFixed(3)}`)
+            console.log(`    Terrain Displacement: ${terrainDisplacement.toFixed(3)}`)
+            console.log(`    Final Shader Height: ${finalHeight.toFixed(3)}`)
           }
         } else {
           console.log(`  ${mesh.userData.id}: bbox height = ${boundingBox.max.y.toFixed(2)}`)
@@ -887,4 +912,17 @@ export class CollisionSystem {
       }
     })
   }
+
+  /**
+   * Quick test for terrain height fix
+   */
+  public testTerrainFix(): void {
+    console.log(`🧪 TESTING TERRAIN HEIGHT FIX:`)
+    this.debugTerrainHeight(0, 0)
+    console.log(`Expected: Ground height should be close to 0.0-1.0, not 4.0`)
+  }
+
+  // ============================================================================
+  // COLLISION CALCULATION HELPERS (MATCHING SHADER LOGIC)  
+  // ============================================================================
 } 

@@ -488,26 +488,20 @@ class LandSystem {
 
   public setElevation(elevation: number): void {
     this.landUniforms.uElevation.value = elevation
-    // Refresh collision system when terrain height changes
-    if (this.collisionSystem) {
-      this.collisionSystem.refreshLandMeshes()
-    }
+    // TODO: Update collision geometry when parameters change
+    console.log(`🏔️ Elevation set to ${elevation} - use refreshCollisionMeshes() to update collision`)
   }
 
   public setRoughness(roughness: number): void {
     this.landUniforms.uRoughness.value = roughness
-    // Refresh collision system when terrain roughness changes
-    if (this.collisionSystem) {
-      this.collisionSystem.refreshLandMeshes()
-    }
+    // TODO: Update collision geometry when parameters change  
+    console.log(`🏔️ Roughness set to ${roughness} - use refreshCollisionMeshes() to update collision`)
   }
 
   public setScale(scale: number): void {
     this.landUniforms.uScale.value = scale
-    // Refresh collision system when terrain scale changes
-    if (this.collisionSystem) {
-      this.collisionSystem.refreshLandMeshes()
-    }
+    // TODO: Update collision geometry when parameters change
+    console.log(`🏔️ Scale set to ${scale} - use refreshCollisionMeshes() to update collision`)
   }
 
   public setLandColor(color: THREE.Color): void {
@@ -613,6 +607,173 @@ class LandSystem {
       piece.mesh.receiveShadow = enabled
     })
     console.log(`🏔️ Land shadow receiving: ${enabled ? 'enabled' : 'disabled'}`)
+  }
+
+  // ============================================================================
+  // TERRAIN DISPLACEMENT - CONVERT SHADER TO REAL GEOMETRY
+  // ============================================================================
+
+  /**
+   * Create collision geometry that matches shader displacement 
+   * Keeps visual shader but creates separate collision mesh
+   */
+  public createCollisionGeometry(landPieceId: string, segments: number = 32): THREE.Mesh | null {
+    const landPiece = this.landPieces.find(piece => piece.id === landPieceId)
+    if (!landPiece || landPiece.type !== 'plane') {
+      console.warn(`❌ Land piece ${landPieceId} not found or not a plane`)
+      return null
+    }
+
+    const originalMesh = landPiece.mesh
+    const material = originalMesh.material as THREE.ShaderMaterial
+    
+    if (!material.uniforms) {
+      console.warn(`❌ No shader uniforms found for ${landPieceId}`)
+      return null
+    }
+
+    // Create lower-resolution collision geometry
+    const size = 100 // Match terrain size
+    const collisionGeometry = new THREE.PlaneGeometry(size, size, segments, segments)
+    collisionGeometry.rotateX(-Math.PI / 2) // Make horizontal
+
+    // Apply shader displacement to collision geometry
+    this.applyShaderDisplacement(collisionGeometry, material.uniforms)
+
+    // Create invisible collision mesh
+    const collisionMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      wireframe: false
+    })
+
+    const collisionMesh = new THREE.Mesh(collisionGeometry, collisionMaterial)
+    collisionMesh.position.copy(originalMesh.position)
+    collisionMesh.rotation.copy(originalMesh.rotation)
+    collisionMesh.scale.copy(originalMesh.scale)
+    collisionMesh.userData = {
+      id: `${landPieceId}-collision`,
+      type: 'land-collision',
+      landType: 'plane', // Mark as plane for collision detection
+      originalId: landPieceId,
+      visible: false
+    }
+
+    // Add to scene
+    this.scene.add(collisionMesh)
+
+    console.log(`✅ Created collision geometry for ${landPieceId} with ${segments}x${segments} segments`)
+    return collisionMesh
+  }
+
+  /**
+   * Apply shader displacement calculation to geometry vertices
+   */
+  private applyShaderDisplacement(geometry: THREE.BufferGeometry, uniforms: any): void {
+    const positionAttribute = geometry.getAttribute('position')
+    const vertices = positionAttribute.array as Float32Array
+
+    const elevation = uniforms.uElevation?.value || 0
+    const roughness = uniforms.uRoughness?.value || 1
+    const scale = uniforms.uScale?.value || 1
+    const islandRadius = uniforms.uIslandRadius?.value || 35
+    const coastSmoothness = uniforms.uCoastSmoothness?.value || 8
+    const seaLevel = uniforms.uSeaLevel?.value || -4
+
+    console.log(`🏗️ Applying displacement: elevation=${elevation}, roughness=${roughness}, scale=${scale}`)
+
+    // Displace each vertex using same calculation as shader
+    let maxDisplacement = 0
+    let minDisplacement = 0
+    for (let i = 0; i < vertices.length; i += 3) {
+      const x = vertices[i]
+      const z = vertices[i + 2]
+      
+      // Calculate distance from center
+      const distanceFromCenter = Math.sqrt(x * x + z * z)
+      
+      // Calculate noise (simplified version of shader noise)
+      const noiseHeight = this.calculateSimpleNoise(x * scale, z * scale, roughness)
+      
+      // Apply island mask (falloff towards edges)
+      const islandMask = this.calculateIslandMask(distanceFromCenter, islandRadius, coastSmoothness)
+      
+      // Calculate final displacement - REMOVE THE 0.1 SCALING!
+      const displacement = noiseHeight * elevation * islandMask
+      
+      // Track displacement range
+      maxDisplacement = Math.max(maxDisplacement, displacement)
+      minDisplacement = Math.min(minDisplacement, displacement)
+      
+      // Apply displacement to Y coordinate
+      vertices[i + 1] += displacement
+      
+      // Ensure doesn't go below sea level
+      vertices[i + 1] = Math.max(vertices[i + 1], seaLevel)
+    }
+
+    console.log(`🏗️ Displacement range: ${minDisplacement.toFixed(2)} to ${maxDisplacement.toFixed(2)} (elevation=${elevation})`)
+
+    positionAttribute.needsUpdate = true
+    geometry.computeVertexNormals()
+  }
+
+  /**
+   * Simplified noise calculation (approximates shader noise)
+   */
+  private calculateSimpleNoise(x: number, z: number, roughness: number): number {
+    // Simple multi-octave noise approximation
+    const octave1 = Math.sin(x * 0.1) * Math.cos(z * 0.1) * 0.5
+    const octave2 = Math.sin(x * 0.3) * Math.cos(z * 0.3) * 0.25
+    const octave3 = Math.sin(x * 0.7) * Math.cos(z * 0.7) * 0.125
+    
+    return (octave1 + octave2 + octave3) * roughness
+  }
+
+  /**
+   * Calculate island mask (terrain falloff towards edges)
+   */
+  private calculateIslandMask(distanceFromCenter: number, islandRadius: number, coastSmoothness: number): number {
+    if (distanceFromCenter <= islandRadius) {
+      return 1.0 // Full height in center
+    }
+    
+    // Smooth falloff beyond island radius
+    const falloffDistance = distanceFromCenter - islandRadius
+    const falloffFactor = Math.exp(-falloffDistance / coastSmoothness)
+    return Math.max(0, falloffFactor)
+  }
+
+  /**
+   * Create collision geometry for all plane-type land pieces
+   */
+  public createAllCollisionGeometry(segments: number = 32): THREE.Mesh[] {
+    const collisionMeshes: THREE.Mesh[] = []
+    
+    this.landPieces.forEach(piece => {
+      if (piece.type === 'plane') {
+        const collisionMesh = this.createCollisionGeometry(piece.id, segments)
+        if (collisionMesh) {
+          collisionMeshes.push(collisionMesh)
+        }
+      }
+    })
+
+    console.log(`🏔️ Created collision geometry for ${collisionMeshes.length} terrain pieces`)
+    return collisionMeshes
+  }
+
+  /**
+   * Get collision meshes (for registering with collision system)
+   */
+  public getCollisionMeshes(): THREE.Mesh[] {
+    const collisionMeshes: THREE.Mesh[] = []
+    this.scene.children.forEach(child => {
+      if (child.userData.type === 'land-collision') {
+        collisionMeshes.push(child as THREE.Mesh)
+      }
+    })
+    return collisionMeshes
   }
 }
 
@@ -1133,14 +1294,17 @@ class IntegratedThreeJSApp {
       this.landSystem.setCollisionSystem(this.collisionSystem)
       console.log('🏔️ Collision system connected to land system AFTER creation')
       
-      // Register land meshes with collision system
-      const landMeshes = this.landSystem.getLandPieces().map(piece => piece.mesh)
-      this.collisionSystem.registerLandMeshes(landMeshes)
+      // Create collision geometry that matches shader displacement
+      console.log('🏗️ Creating collision geometry for terrain...')
+      const collisionMeshes = this.landSystem.createAllCollisionGeometry(32) // 32x32 segments for good collision
       
-      // Debug: Log land mesh registration
-      console.log(`🏔️ Registered ${landMeshes.length} land meshes with collision system:`)
-      landMeshes.forEach((mesh, index) => {
-        console.log(`  ${index}: ${mesh.userData.id} (${mesh.userData.type}/${mesh.userData.landType}) at (${mesh.position.x.toFixed(1)}, ${mesh.position.y.toFixed(1)}, ${mesh.position.z.toFixed(1)})`)
+      // Register collision meshes (not visual meshes) with collision system
+      this.collisionSystem.registerLandMeshes(collisionMeshes)
+      
+      // Debug: Log collision mesh registration
+      console.log(`🏔️ Registered ${collisionMeshes.length} collision meshes with collision system:`)
+      collisionMeshes.forEach((mesh, index) => {
+        console.log(`  ${index}: ${mesh.userData.id} (${mesh.userData.type}) at (${mesh.position.x.toFixed(1)}, ${mesh.position.y.toFixed(1)}, ${mesh.position.z.toFixed(1)})`)
       })
       
       // Test collision at origin after registration
@@ -1907,6 +2071,10 @@ class IntegratedThreeJSApp {
     return this.collisionSystem
   }
 
+  getLandSystem(): LandSystem | null {
+    return this.landSystem
+  }
+
   /**
    * Dispose of the Parameter GUI
    */
@@ -1971,6 +2139,48 @@ const app = new IntegratedThreeJSApp(
 ;(window as any).debugLandMeshes = () => app.getCollisionSystem().debugLandMeshes()
 ;(window as any).debugTerrainHeight = (x: number = 0, z: number = 0) => app.getCollisionSystem().debugTerrainHeight(x, z)
 ;(window as any).getTerrainHeight = (x: number = 0, z: number = 0) => app.getCollisionSystem().getTerrainHeight(x, z)
+;(window as any).testTerrainFix = () => app.getCollisionSystem().testTerrainFix()
+;(window as any).createCollisionGeometry = (segments: number = 32) => {
+  if (app.getLandSystem()) {
+    return app.getLandSystem()!.createAllCollisionGeometry(segments)
+  } else {
+    console.error('❌ Land system not available')
+    return []
+  }
+}
+;(window as any).refreshCollisionMeshes = () => {
+  console.log('🔄 Refreshing collision meshes...')
+  if (app.getLandSystem()) {
+    const collisionMeshes = app.getLandSystem()!.createAllCollisionGeometry(32)
+    app.getCollisionSystem().registerLandMeshes(collisionMeshes)
+    console.log(`✅ Refreshed ${collisionMeshes.length} collision meshes`)
+  } else {
+    console.error('❌ Land system not available')
+  }
+}
+;(window as any).checkCollisionMeshes = () => {
+  console.log('🔍 CHECKING COLLISION MESH STATUS:')
+  if (app.getLandSystem()) {
+    const collisionMeshes = app.getLandSystem()!.getCollisionMeshes()
+    console.log(`Found ${collisionMeshes.length} collision meshes in scene:`)
+    collisionMeshes.forEach((mesh, index) => {
+      console.log(`  ${index}: ${mesh.userData.id} (${mesh.userData.type}) at (${mesh.position.x.toFixed(1)}, ${mesh.position.y.toFixed(1)}, ${mesh.position.z.toFixed(1)})`)
+    })
+  }
+  
+  const collisionSystem = app.getCollisionSystem()
+  console.log(`CollisionSystem has ${collisionSystem.landMeshes?.length || 0} registered land meshes`)
+  app.getCollisionSystem().debugLandMeshes()
+}
+;(window as any).testCollisionDisplacement = () => {
+  console.log('🧪 TESTING COLLISION DISPLACEMENT:')
+  refreshCollisionMeshes()
+  setTimeout(() => {
+    debugTerrainHeight(0, 0)
+    debugTerrainHeight(10, 10)
+    debugTerrainHeight(25, 25)
+  }, 500)
+}
 
 // Register debug methods globally
 ;(window as any).testPlayerCollision = () => app.testPlayerCollision()
