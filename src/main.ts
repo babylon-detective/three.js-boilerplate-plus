@@ -1622,7 +1622,7 @@ class IntegratedThreeJSApp {
       const sunsetColor = new THREE.Color(1, 0.4, 0.1)
       const dayColor = new THREE.Color(1, 1, 0.9)
       const nightColor = new THREE.Color(0.2, 0.3, 0.6)
-      const t = Math.max(0, Math.sin(THREE.MathUtils.degToRad(sunElevation)))
+      // const t = Math.max(0, Math.sin(THREE.MathUtils.degToRad(sunElevation))) // Unused for now
       
       // Interpolate between night, sunset, and day colors
       let finalColor: THREE.Color
