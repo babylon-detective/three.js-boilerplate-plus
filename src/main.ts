@@ -19,6 +19,7 @@ import { logger, LogModule } from './systems/Logger'
 import { performanceMonitor } from './systems/PerformanceMonitor'
 import { DebugGUIManager } from './systems/DebugGUIManager'
 import { HUDSystem, HUDData } from './systems/HUDSystem'
+import { SHADERS, ShaderPath } from './shaderImports'
 
 // TSL (Three Shader Language) - works with both WebGL and WebGPU!
 // import { 
@@ -52,6 +53,14 @@ class ShaderLoader {
     }
 
     try {
+      // Use imported shaders instead of fetch for production compatibility
+      if (path in SHADERS) {
+        const content = SHADERS[path as ShaderPath]
+        this.cache.set(path, content)
+        return content
+      }
+      
+      // Fallback to fetch for development/custom shaders
       const response = await fetch(path)
       if (!response.ok) {
         throw new Error(`Failed to load shader: ${path}`)

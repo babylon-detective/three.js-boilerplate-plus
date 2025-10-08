@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { ObjectManager } from './ObjectManager'
 import { AnimationSystem } from './AnimationSystem'
+import { SHADERS, ShaderPath } from '../shaderImports'
 
 // Shader loader utility
 interface ShaderConfig {
@@ -17,6 +18,14 @@ class ShaderLoader {
     }
 
     try {
+      // Use imported shaders instead of fetch for production compatibility
+      if (path in SHADERS) {
+        const shaderCode = SHADERS[path as ShaderPath]
+        this.cache.set(path, shaderCode)
+        return shaderCode
+      }
+      
+      // Fallback to fetch for development/custom shaders
       const response = await fetch(path)
       if (!response.ok) {
         throw new Error(`Failed to load shader: ${path}`)
