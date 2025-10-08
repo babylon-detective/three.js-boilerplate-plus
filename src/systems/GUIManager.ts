@@ -279,8 +279,8 @@ export class GUIManager {
     Object.entries(this.controllers).forEach(([key, controller]) => {
       if (key.startsWith(`${section}.`)) {
         const property = key.split('.')[1]
-        if (config[property] !== undefined) {
-          controller.setValue(config[property])
+        if ((config as any)[property] !== undefined) {
+          controller.setValue((config as any)[property])
         }
       }
     })

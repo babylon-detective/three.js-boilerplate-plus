@@ -1655,15 +1655,16 @@ class IntegratedThreeJSApp {
     }
   }
 
-  private updateSkyUniforms(): void {
-    if (!this.sky) return
-    
-    const skyUniforms = this.sky.material.uniforms
-    skyUniforms['turbidity'].value = this.skyConfig.turbidity
-    skyUniforms['rayleigh'].value = this.skyConfig.rayleigh
-    skyUniforms['mieCoefficient'].value = this.skyConfig.mieCoefficient
-    skyUniforms['mieDirectionalG'].value = this.skyConfig.mieDirectionalG
-  }
+  // UNUSED: Method for updating sky uniforms - kept for future use
+  // private updateSkyUniforms(): void {
+  //   if (!this.sky) return
+  //   
+  //   const skyUniforms = this.sky.material.uniforms
+  //   skyUniforms['turbidity'].value = this.skyConfig.turbidity
+  //   skyUniforms['rayleigh'].value = this.skyConfig.rayleigh
+  //   skyUniforms['mieCoefficient'].value = this.skyConfig.mieCoefficient
+  //   skyUniforms['mieDirectionalG'].value = this.skyConfig.mieDirectionalG
+  // }
 
   private async createOceanSystem(): Promise<void> {
     try {
@@ -1841,11 +1842,11 @@ class IntegratedThreeJSApp {
     
     if (intersects.length > 0) {
       const clickedObject = intersects[0].object as THREE.Mesh
-      const distance = intersects[0].distance
-      const point = intersects[0].point
+      // const distance = intersects[0].distance // Unused for now
+      // const point = intersects[0].point // Unused for now
       
-              // Find the mesh index in scene traversal order
-      const meshIndex = allMeshes.findIndex(mesh => mesh.uuid === clickedObject.uuid)
+      // Find the mesh index in scene traversal order
+      // const meshIndex = allMeshes.findIndex(mesh => mesh.uuid === clickedObject.uuid) // Unused for now
       
       // Enhanced mesh identification
       // console.group('🎯 Mesh Click Detection')
@@ -1872,30 +1873,30 @@ class IntegratedThreeJSApp {
       
       // Identify mesh type based on userData or material properties
       let meshType = 'Unknown'
-      let meshDescription = ''
+      // let meshDescription = '' // Unused for now
       
       if (clickedObject.userData.type) {
         meshType = clickedObject.userData.type
-        meshDescription = clickedObject.userData.id || 'No ID'
+        // meshDescription = clickedObject.userData.id || 'No ID' // Unused for now
       } else if (clickedObject.userData.id) {
         meshType = 'Identified'
-        meshDescription = clickedObject.userData.id
+        // meshDescription = clickedObject.userData.id // Unused for now
       } else {
         // Try to identify by material or geometry properties
         if (clickedObject.material instanceof THREE.ShaderMaterial) {
           if (clickedObject.material.uniforms?.uWaterColor) {
             meshType = 'Ocean'
-            meshDescription = 'Ocean LOD System'
+            // meshDescription = 'Ocean LOD System' // Unused for now
           } else if (clickedObject.material.uniforms?.uLandColor) {
             meshType = 'Land'
-            meshDescription = 'Terrain System'
+            // meshDescription = 'Terrain System' // Unused for now
           } else {
             meshType = 'Shader'
-            meshDescription = 'Custom Shader Material'
+            // meshDescription = 'Custom Shader Material' // Unused for now
           }
         } else if (clickedObject.material instanceof THREE.MeshStandardMaterial) {
           meshType = 'Standard'
-          meshDescription = 'Standard Material Mesh'
+          // meshDescription = 'Standard Material Mesh' // Unused for now
         }
       }
       

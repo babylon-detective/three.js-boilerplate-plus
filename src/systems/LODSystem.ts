@@ -386,7 +386,7 @@ export function createLODSystem(
 }
 
 // Export all types for external use
-export {
+export type {
   LODStrategy,
   LODLevel,
   LODMetrics,

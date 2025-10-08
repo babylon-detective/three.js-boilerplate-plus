@@ -129,7 +129,18 @@ export const DEFAULT_CONFIGS = {
     sunIntensity: 1.2,
     ambientIntensity: 0.3,
     shadowBias: -0.0001
-  } as LightingConfig
+  } as LightingConfig,
+
+  camera: {
+    id: 'camera',
+    version: '1.0.0',
+    lastModified: Date.now(),
+    position: { x: 0, y: 10, z: 30 },
+    rotation: { x: 0, y: 0, z: 0 },
+    fov: 75,
+    zoom: 1.0,
+    target: { x: 0, y: 0, z: 0 }
+  } as CameraConfig
 } as const
 
 // Storage keys
@@ -194,8 +205,9 @@ export class ConfigManager {
     action: string = 'manual_update'
   ): void {
     // Deep merge updates
+    const currentSection = this.userConfig[section] as Record<string, any> || {}
     this.userConfig[section] = {
-      ...this.userConfig[section],
+      ...currentSection,
       ...updates,
       lastModified: Date.now()
     } as any
@@ -317,7 +329,7 @@ export class ConfigManager {
   public resetSection<T extends keyof SceneConfig>(section: T): void {
     delete this.userConfig[section]
     this.saveUserConfig()
-    this.addToHistory(`reset_${section}`, { [section]: DEFAULT_CONFIGS[section] })
+    this.addToHistory(`reset_${section}`, { [section]: (DEFAULT_CONFIGS as any)[section] })
     // console.log(`🔄 Reset ${section} to defaults`)
   }
 

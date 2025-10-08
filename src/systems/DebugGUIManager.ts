@@ -2,9 +2,10 @@ import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js'
 import * as THREE from 'three'
 import { ObjectManager } from './ObjectManager'
 import { AnimationSystem } from './AnimationSystem'
-import { CollisionSystem } from './CollisionSystem'
-import { CameraManager } from './CameraManager'
-import { PlayerController } from './PlayerController'
+import { ConfigManager } from './ConfigManager'
+// import { CollisionSystem } from './CollisionSystem' // Unused
+// import { CameraManager } from './CameraManager' // Unused
+// import { PlayerController } from './PlayerController' // Unused
 import { performanceMonitor } from './PerformanceMonitor'
 import { logger, LogModule } from './Logger'
 
@@ -177,11 +178,13 @@ export class DebugGUIManager {
     })
     positionFolder.open()
     
-    // Camera FOV
-    cameraFolder.add(this.systems.camera, 'fov', 10, 150).onChange(() => {
-      this.systems.camera.updateProjectionMatrix()
-      this.systems.objectManager.saveCameraState()
-    })
+    // Camera FOV (only for PerspectiveCamera)
+    if (this.systems.camera instanceof THREE.PerspectiveCamera) {
+      cameraFolder.add(this.systems.camera, 'fov', 10, 150).onChange(() => {
+        (this.systems.camera as THREE.PerspectiveCamera).updateProjectionMatrix()
+        this.systems.objectManager.saveCameraState()
+      })
+    }
     
     // Camera persistence controls
     const cameraPersistence = {
@@ -568,8 +571,10 @@ export class DebugGUIManager {
       const phi = THREE.MathUtils.degToRad(90 - this.systems.skyConfig.elevation)
       const theta = THREE.MathUtils.degToRad(this.systems.skyConfig.azimuth)
       
-      this.systems.sun.setFromSphericalCoords(1, phi, theta)
-      this.systems.sky.material.uniforms.sunPosition.value.copy(this.systems.sun)
+      // Create temporary sun vector since systems.sun doesn't exist
+      const sun = new THREE.Vector3()
+      sun.setFromSphericalCoords(1, phi, theta)
+      this.systems.sky.material.uniforms.sunPosition.value.copy(sun)
     }
   }
 

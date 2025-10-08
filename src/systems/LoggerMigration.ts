@@ -5,7 +5,8 @@
  * to the centralized logging system.
  */
 
-import { logger, LogModule, LogLevel } from './Logger'
+import * as THREE from 'three'
+import { logger, LogModule } from './Logger'
 
 /**
  * Migration utilities for transitioning from console.log to centralized logging

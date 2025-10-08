@@ -163,39 +163,37 @@ class Animation<T extends THREE.Object3D = THREE.Object3D> {
   private updateValues(progress: number): void {
     // Position animation
     if (this.startValues.position && this.endValues.position) {
-      this.target.position.lerpVectors(
-        this.startValues.position,
-        this.endValues.position,
-        progress
-      )
+      const startPos = this.startValues.position as THREE.Vector3
+      const endPos = this.endValues.position as THREE.Vector3
+      this.target.position.lerpVectors(startPos, endPos, progress)
     }
 
     // Rotation animation
     if (this.startValues.rotation && this.endValues.rotation) {
+      const startRot = this.startValues.rotation
+      const endRot = this.endValues.rotation
       this.target.rotation.x = THREE.MathUtils.lerp(
-        this.startValues.rotation.x,
-        this.endValues.rotation.x,
+        startRot.x ?? 0,
+        endRot.x ?? 0,
         progress
       )
       this.target.rotation.y = THREE.MathUtils.lerp(
-        this.startValues.rotation.y,
-        this.endValues.rotation.y,
+        startRot.y ?? 0,
+        endRot.y ?? 0,
         progress
       )
       this.target.rotation.z = THREE.MathUtils.lerp(
-        this.startValues.rotation.z,
-        this.endValues.rotation.z,
+        startRot.z ?? 0,
+        endRot.z ?? 0,
         progress
       )
     }
 
     // Scale animation
     if (this.startValues.scale && this.endValues.scale) {
-      this.target.scale.lerpVectors(
-        this.startValues.scale,
-        this.endValues.scale,
-        progress
-      )
+      const startScale = this.startValues.scale as THREE.Vector3
+      const endScale = this.endValues.scale as THREE.Vector3
+      this.target.scale.lerpVectors(startScale, endScale, progress)
     }
 
     // Material animation
@@ -341,7 +339,7 @@ export class AnimationSystem {
 }
 
 // Export types for use in other modules
-export {
+export type {
   Animation,
   AnimationConfig,
   AnimationState,
