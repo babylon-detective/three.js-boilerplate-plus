@@ -15,23 +15,24 @@ import { PlayerController } from './systems/PlayerController'
 import { ParameterManager } from './systems/ParameterManager'
 import { ParameterGUI } from './systems/ParameterGUI'
 import { ParameterIntegration } from './systems/ParameterIntegration'
-import { logger, LogModule, LogLevel } from './systems/Logger'
+import { logger, LogModule } from './systems/Logger'
 import { performanceMonitor } from './systems/PerformanceMonitor'
 import { DebugGUIManager } from './systems/DebugGUIManager'
+import { HUDSystem, HUDData } from './systems/HUDSystem'
 
 // TSL (Three Shader Language) - works with both WebGL and WebGPU!
-import { 
-  sin, 
-  cos, 
-  mul, 
-  add, 
-  mix, 
-  vec3, 
-  vec4, 
-  positionGeometry, 
-  uniform,
-  time
-} from 'three/tsl'
+// import { 
+//   sin, 
+//   cos, 
+//   mul, 
+//   add, 
+//   mix, 
+//   vec3, 
+//   vec4, 
+//   positionGeometry, 
+//   uniform,
+//   time
+// } from 'three/tsl'
 
 // ============================================================================
 // SHADER LOADING UTILITIES
@@ -899,6 +900,7 @@ class IntegratedThreeJSApp {
   private parameterManager!: ParameterManager
   private parameterGUI!: ParameterGUI
   private parameterIntegration!: ParameterIntegration
+  private hudSystem!: HUDSystem
   
   // Timing for delta time calculation
   private lastTime: number = 0
@@ -964,6 +966,8 @@ class IntegratedThreeJSApp {
       position: { top: '0px', right: '320px' },
       width: 300
     })
+    // Initialize HUD system
+    this.hudSystem = new HUDSystem()
     // Parameter integration will be initialized after all systems are created
     
     // Initialize player controller with collision system and camera manager
@@ -1947,6 +1951,9 @@ class IntegratedThreeJSApp {
       // Update player controller (physics, movement, collision)
       this.playerController.update(deltaTime)
       
+      // Update HUD with current data
+      this.updateHUD(deltaTime)
+      
       // Update collision system (gravity, collision resolution) - throttled for performance
       performanceMonitor.startCollisionCheck()
       this.collisionSystem.updateDynamicObjects(deltaTime)
@@ -2075,6 +2082,75 @@ class IntegratedThreeJSApp {
     return this.landSystem
   }
 
+  getHUDSystem(): HUDSystem {
+    return this.hudSystem
+  }
+
+  /**
+   * Update HUD with current game data
+   */
+  private updateHUD(deltaTime: number): void {
+    // Get player data
+    const playerStatus = this.playerController.getStatus()
+    const playerPosition = this.playerController.getPosition()
+    const playerVelocity = this.playerController.getVelocity()
+    const terrainHeight = this.collisionSystem.getTerrainHeight(playerPosition.x, playerPosition.z)
+    
+    // Get input states from player controller
+    const inputState = this.playerController.getInputState()
+    
+    // Get performance data
+    const fps = Math.round(1 / deltaTime)
+    
+    // Get renderer info
+    const renderInfo = this.renderer.info
+    
+    // Prepare HUD data
+    const hudData: Partial<HUDData> = {
+      // Player state
+      position: {
+        x: playerPosition.x,
+        y: playerPosition.y,
+        z: playerPosition.z
+      },
+      velocity: {
+        x: playerVelocity.x,
+        y: playerVelocity.y,
+        z: playerVelocity.z
+      },
+      onGround: (playerStatus as any).onGround,
+      terrainHeight: terrainHeight,
+      
+      // Input states
+      keys: {
+        w: inputState.forward,
+        a: inputState.left,
+        s: inputState.backward,
+        d: inputState.right,
+        space: inputState.jump,
+        shift: inputState.run,
+        c: inputState.camera
+      },
+      mouse: {
+        x: inputState.mouseX || 0,
+        y: inputState.mouseY || 0,
+        leftButton: inputState.mouseLeft || false,
+        rightButton: inputState.mouseRight || false
+      },
+      
+      // System states
+      mode: this.cameraManager.getCurrentMode(),
+      fps: fps,
+      
+      // Performance
+      triangles: renderInfo.render.triangles,
+      drawCalls: renderInfo.render.calls
+    }
+    
+    // Update HUD
+    this.hudSystem.updateData(hudData)
+  }
+
   /**
    * Dispose of the Parameter GUI
    */
@@ -2172,13 +2248,27 @@ const app = new IntegratedThreeJSApp(
   console.log(`CollisionSystem has ${collisionSystem.landMeshes?.length || 0} registered land meshes`)
   app.getCollisionSystem().debugLandMeshes()
 }
+
+// HUD debug functions
+;(window as any).toggleHUD = () => {
+  app.getHUDSystem().toggle()
+  console.log('🖥️ HUD toggled')
+}
+;(window as any).showHUD = () => {
+  app.getHUDSystem().show()
+  console.log('🖥️ HUD shown')
+}
+;(window as any).hideHUD = () => {
+  app.getHUDSystem().hide()
+  console.log('🖥️ HUD hidden')
+}
 ;(window as any).testCollisionDisplacement = () => {
   console.log('🧪 TESTING COLLISION DISPLACEMENT:')
-  refreshCollisionMeshes()
+  ;(window as any).refreshCollisionMeshes()
   setTimeout(() => {
-    debugTerrainHeight(0, 0)
-    debugTerrainHeight(10, 10)
-    debugTerrainHeight(25, 25)
+    ;(window as any).debugTerrainHeight(0, 0)
+    ;(window as any).debugTerrainHeight(10, 10)
+    ;(window as any).debugTerrainHeight(25, 25)
   }, 500)
 }
 

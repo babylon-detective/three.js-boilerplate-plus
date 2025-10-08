@@ -41,6 +41,7 @@ export interface PlayerInput {
   right: boolean
   jump: boolean
   run: boolean
+  camera: boolean // 'C' key for camera mode switching
 }
 
 // ============================================================================
@@ -115,7 +116,8 @@ export class PlayerController {
       left: false,
       right: false,
       jump: false,
-      run: false
+      run: false,
+      camera: false
     }
     
     // Bind input handlers
@@ -227,10 +229,11 @@ export class PlayerController {
     this.input.right = this.keyStates.get('KeyD') || false
     this.input.jump = this.keyStates.get('Space') || false
     this.input.run = (this.keyStates.get('ShiftLeft') || this.keyStates.get('ShiftRight')) || false
+    this.input.camera = this.keyStates.get('KeyC') || false
     
     // Debug: Log input state occasionally
     if (Math.random() < 0.1) { // 10% chance per frame
-      console.log(`🎮 Input: forward=${this.input.forward}, backward=${this.input.backward}, left=${this.input.left}, right=${this.input.right}, run=${this.input.run}`)
+      console.log(`🎮 Input: forward=${this.input.forward}, backward=${this.input.backward}, left=${this.input.left}, right=${this.input.right}, run=${this.input.run}, camera=${this.input.camera}`)
     }
   }
 
@@ -523,6 +526,22 @@ export class PlayerController {
       isRunning: this.state.isRunning,
       input: { ...this.input },
       config: this.getConfig()
+    }
+  }
+
+  public getInputState(): any {
+    return {
+      forward: this.input.forward,
+      backward: this.input.backward,
+      left: this.input.left,
+      right: this.input.right,
+      jump: this.input.jump,
+      run: this.input.run,
+      camera: this.input.camera,
+      mouseX: 0, // Mouse input would need to be tracked separately
+      mouseY: 0,
+      mouseLeft: false,
+      mouseRight: false
     }
   }
 
