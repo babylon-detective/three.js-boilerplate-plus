@@ -21,6 +21,7 @@ interface AppReference {
   landSystem?: any
   parameterManager?: any
   parameterGUI?: any
+  parameterIntegration?: any
   deviceType: string
   inputMethods: string[]
 }
@@ -438,6 +439,218 @@ export class ConsoleCommands {
     }
   }
 
+  /**
+   * Analyze rendering performance and optimization opportunities
+   */
+  public analyzeRenderingPerformance(): void {
+    console.group('🔍 RENDERING PERFORMANCE ANALYSIS')
+    
+    const renderInfo = this.app.renderer.info
+    const objects = this.app.objectManager.getAllObjects()
+    
+    // Current performance metrics
+    console.log('📊 Current Performance:')
+    console.log(`  Draw Calls: ${renderInfo.render.calls}`)
+    console.log(`  Triangles: ${renderInfo.render.triangles.toLocaleString()}`)
+    console.log(`  Geometries: ${renderInfo.memory.geometries}`)
+    console.log(`  Textures: ${renderInfo.memory.textures}`)
+    console.log(`  Managed Objects: ${objects.length}`)
+    
+    // Analyze object distribution
+    const objectTypes = new Map<string, number>()
+    const geometryReuse = new Map<string, number>()
+    const materialReuse = new Map<string, number>()
+    
+    for (const obj of objects) {
+      // Count by type
+      objectTypes.set(obj.type, (objectTypes.get(obj.type) || 0) + 1)
+      
+      // Count geometry reuse
+      const geoId = obj.mesh.geometry.uuid
+      geometryReuse.set(geoId, (geometryReuse.get(geoId) || 0) + 1)
+      
+      // Count material reuse
+      const matId = (obj.mesh.material as THREE.Material).uuid
+      materialReuse.set(matId, (materialReuse.get(matId) || 0) + 1)
+    }
+    
+    console.log('🎯 Object Distribution:')
+    for (const [type, count] of objectTypes) {
+      console.log(`  ${type}: ${count} objects`)
+    }
+    
+    // Identify instancing opportunities
+    console.log('🚀 GPU Instancing Opportunities:')
+    let instancingCandidates = 0
+    let potentialSavings = 0
+    
+    for (const [geoId, count] of geometryReuse) {
+      if (count >= 3) { // 3+ objects with same geometry
+        instancingCandidates++
+        potentialSavings += count - 1
+        console.log(`  Geometry ${geoId.substring(0, 8)}: ${count} objects → 1 draw call (save ${count - 1})`)
+      }
+    }
+    
+    if (instancingCandidates === 0) {
+      console.log('  ✅ No obvious instancing opportunities (good!)')
+    } else {
+      console.log(`  💡 Total potential draw call savings: ${potentialSavings}`)
+    }
+    
+    // Identify batching opportunities  
+    console.log('📦 Material Batching Opportunities:')
+    let batchingCandidates = 0
+    
+    for (const [matId, count] of materialReuse) {
+      if (count >= 2) {
+        batchingCandidates++
+        console.log(`  Material ${matId.substring(0, 8)}: ${count} objects → potential batching`)
+      }
+    }
+    
+    if (batchingCandidates === 0) {
+      console.log('  ✅ Materials are well optimized')
+    }
+    
+    // Performance recommendations
+    console.log('💡 Recommendations:')
+    
+    if (renderInfo.render.calls > 50) {
+      console.log('  🔴 HIGH: Too many draw calls (>50). Consider instancing/batching.')
+    } else if (renderInfo.render.calls > 20) {
+      console.log('  🟡 MEDIUM: Moderate draw calls. Room for optimization.')
+    } else {
+      console.log('  🟢 GOOD: Draw call count is reasonable.')
+    }
+    
+    if (renderInfo.render.triangles > 1000000) {
+      console.log('  🔴 HIGH: High triangle count (>1M). Consider LOD system.')
+    } else if (renderInfo.render.triangles > 500000) {
+      console.log('  🟡 MEDIUM: Moderate triangle count. Monitor performance.')
+    } else {
+      console.log('  🟢 GOOD: Triangle count is reasonable.')
+    }
+    
+    if (renderInfo.memory.geometries > 100) {
+      console.log('  🟡 MEDIUM: Many geometry instances. Consider sharing.')
+    }
+    
+    if (renderInfo.memory.textures > 50) {
+      console.log('  🟡 MEDIUM: Many textures loaded. Consider atlasing.')
+    }
+    
+    console.groupEnd()
+  }
+
+  /**
+   * Show detailed object breakdown for optimization
+   */
+  public showObjectBreakdown(): void {
+    console.group('📋 DETAILED OBJECT BREAKDOWN')
+    
+    const objects = this.app.objectManager.getAllObjects()
+    const breakdown = new Map<string, {
+      count: number,
+      triangles: number,
+      objects: string[]
+    }>()
+    
+    for (const obj of objects) {
+      const key = `${obj.type}`
+      if (!breakdown.has(key)) {
+        breakdown.set(key, { count: 0, triangles: 0, objects: [] })
+      }
+      
+      const entry = breakdown.get(key)!
+      entry.count++
+      entry.objects.push(obj.id)
+      
+      // Calculate triangles
+      const geometry = obj.mesh.geometry
+      const triangleCount = geometry.index ? 
+        geometry.index.count / 3 : 
+        geometry.attributes.position.count / 3
+      entry.triangles += triangleCount
+    }
+    
+    // Sort by triangle count
+    const sorted = Array.from(breakdown.entries()).sort((a, b) => b[1].triangles - a[1].triangles)
+    
+    for (const [type, data] of sorted) {
+      console.log(`${type.toUpperCase()}:`)
+      console.log(`  Objects: ${data.count}`)
+      console.log(`  Triangles: ${Math.floor(data.triangles).toLocaleString()}`)
+      console.log(`  Avg Triangles/Object: ${Math.floor(data.triangles / data.count).toLocaleString()}`)
+      console.log(`  IDs: ${data.objects.join(', ')}`)
+      console.log('')
+    }
+    
+    console.groupEnd()
+  }
+
+  /**
+   * Simulate instancing optimization
+   */
+  public simulateInstancing(): void {
+    console.group('🚀 INSTANCING SIMULATION')
+    
+    const objects = this.app.objectManager.getAllObjects()
+    const renderInfo = this.app.renderer.info
+    
+    // Group by geometry + material
+    const groups = new Map<string, typeof objects>()
+    
+    for (const obj of objects) {
+      if (obj.type === 'ocean' || obj.type === 'land') continue // Skip terrain
+      
+      const geoId = obj.mesh.geometry.uuid
+      const matId = (obj.mesh.material as THREE.Material).uuid
+      const key = `${geoId}-${matId}`
+      
+      if (!groups.has(key)) {
+        groups.set(key, [])
+      }
+      groups.get(key)!.push(obj)
+    }
+    
+    let currentDrawCalls = renderInfo.render.calls
+    let optimizedDrawCalls = currentDrawCalls
+    let instancedGroups = 0
+    let totalInstancesSaved = 0
+    
+    console.log(`Current Draw Calls: ${currentDrawCalls}`)
+    console.log('')
+    
+    for (const [key, group] of groups) {
+      if (group.length >= 3) { // Worth instancing
+        const savings = group.length - 1
+        optimizedDrawCalls -= savings
+        instancedGroups++
+        totalInstancesSaved += savings
+        
+        console.log(`Group ${key.substring(0, 16)}...`)
+        console.log(`  Objects: ${group.length} → 1 instanced mesh`)
+        console.log(`  Draw Call Savings: ${savings}`)
+        console.log(`  Objects: ${group.map(o => o.id).join(', ')}`)
+        console.log('')
+      }
+    }
+    
+    console.log('📊 SIMULATION RESULTS:')
+    console.log(`  Instanced Groups: ${instancedGroups}`)
+    console.log(`  Total Draw Call Savings: ${totalInstancesSaved}`)
+    console.log(`  Draw Calls: ${currentDrawCalls} → ${optimizedDrawCalls} (${Math.round((1 - optimizedDrawCalls/currentDrawCalls) * 100)}% reduction)`)
+    
+    if (instancedGroups === 0) {
+      console.log('  ✅ No instancing opportunities found - scene is already well optimized!')
+    } else {
+      console.log(`  💡 Potential performance improvement: ${Math.round((totalInstancesSaved / currentDrawCalls) * 100)}%`)
+    }
+    
+    console.groupEnd()
+  }
+
   public printPerformanceStats(): void {
     console.group('📊 Performance Statistics')
     const stats = this.getPerformanceStats()
@@ -601,6 +814,14 @@ export class ConsoleCommands {
 - showParameters()                 - Show parameter management status
 - saveParameterState(name)         - Save current parameters as state
 - loadParameterState(name)         - Load parameters from saved state
+- setDefaultState()                - Save current parameters as default state "1"
+- resetToDefault()                 - Reset to default state "1" 
+- listStates()                     - List all saved parameter states
+- exportState(name)                - Export state as JSON for sharing across browsers
+- importState(json, name?)         - Import JSON state (defaults to state "1")
+- shareDefaultState()              - Quick export of state "1" for sharing
+- createOptimalDefault()           - Create optimized default state "1"
+- generateHardcodedDefaults()      - Generate code to hardcode state "1" as system defaults
 - resetParameters(category?)       - Reset parameters to defaults
 - exportParameters()               - Export parameters as JSON
 
@@ -778,6 +999,14 @@ export class ConsoleCommands {
     win.showParameters = () => this.showParameters()
     win.saveParameterState = (name: string) => this.saveParameterState(name)
     win.loadParameterState = (name: string) => this.loadParameterState(name)
+    win.setDefaultState = () => this.setDefaultState()
+    win.resetToDefault = () => this.resetToDefault()
+    win.listStates = () => this.listParameterStates()
+    win.exportState = (name: string) => this.exportState(name)
+    win.importState = (json: string, name?: string) => this.importState(json, name)
+    win.shareDefaultState = () => this.shareDefaultState()
+    win.createOptimalDefault = () => this.createOptimalDefault()
+    win.generateHardcodedDefaults = () => this.generateHardcodedDefaults()
     win.resetParameters = (category?: string) => this.resetParameters(category)
     win.exportParameters = () => this.exportParameters()
     
@@ -1379,8 +1608,426 @@ export class ConsoleCommands {
     const success = this.app.parameterManager.loadState(name)
     if (success) {
       console.log(`📂 Parameters loaded from state: ${name}`)
+      // Update all systems with loaded parameters
+      if (this.app.parameterIntegration) {
+        this.app.parameterIntegration.updateAllSystems()
+        console.log('🔄 All systems updated with loaded parameters')
+      }
     } else {
       console.error(`❌ Failed to load state: ${name}`)
+    }
+  }
+
+  /**
+   * Set state "1" as the new default startup state
+   */
+  public setDefaultState(): void {
+    if (!this.app.parameterManager) {
+      console.error('❌ Parameter manager not available')
+      return
+    }
+    
+    this.app.parameterManager.saveState('1')
+    console.log('💾 Current parameters saved as state "1" (default startup state)')
+    console.log('🔄 State "1" will now load automatically on startup')
+  }
+
+  /**
+   * Reset to state "1" (default state)
+   */
+  public resetToDefault(): void {
+    if (!this.app.parameterManager) {
+      console.error('❌ Parameter manager not available')
+      return
+    }
+    
+    const success = this.app.parameterManager.loadState('1')
+    if (success) {
+      console.log('📂 Reset to default state "1"')
+      // Update all systems with loaded parameters
+      if (this.app.parameterIntegration) {
+        this.app.parameterIntegration.updateAllSystems()
+        console.log('🔄 All systems updated with default parameters')
+      }
+    } else {
+      console.warn('⚠️ Default state "1" not found. Creating it with current parameters...')
+      this.setDefaultState()
+    }
+  }
+
+  /**
+   * List all saved parameter states
+   */
+  public listParameterStates(): void {
+    if (!this.app.parameterManager) {
+      console.error('❌ Parameter manager not available')
+      return
+    }
+    
+    const states = this.app.parameterManager.getSavedStateNames()
+    if (states.length === 0) {
+      console.log('📝 No saved parameter states found')
+      console.log('💡 States are stored per-browser. To share across browsers:')
+      console.log('   1. Use exportState("1") to get JSON')
+      console.log('   2. Use importState(json) in the other browser')
+      return
+    }
+    
+    console.group('📋 Saved Parameter States')
+    states.forEach((stateName: string, index: number) => {
+      const isDefault = stateName === '1'
+      const prefix = isDefault ? '⭐' : '  '
+      console.log(`${prefix} ${index + 1}. ${stateName}${isDefault ? ' (default startup state)' : ''}`)
+    })
+    console.groupEnd()
+    
+    console.log('💡 Use loadState("name") to load a state or setDefaultState() to save current as default')
+    console.log('🔄 To share states across browsers, use exportState("1") and importState(json)')
+  }
+
+  /**
+   * Export a specific state as JSON for sharing across browsers
+   */
+  public exportState(stateName: string): void {
+    if (!this.app.parameterManager) {
+      console.error('❌ Parameter manager not available')
+      return
+    }
+
+    if (!stateName || stateName.trim() === '') {
+      console.warn('⚠️ State name cannot be empty')
+      return
+    }
+
+    const states = this.app.parameterManager.getSavedStateNames()
+    if (!states.includes(stateName)) {
+      console.error(`❌ State "${stateName}" not found`)
+      console.log('Available states:', states.join(', '))
+      return
+    }
+
+    try {
+      // Get the state data
+      const stateData = this.app.parameterManager.exportParameters()
+      
+      // Load the specific state temporarily to get its data
+      const currentState = this.app.parameterManager.exportParameters()
+      const success = this.app.parameterManager.loadState(stateName)
+      
+      if (success) {
+        const exportedState = this.app.parameterManager.exportParameters()
+        
+        // Restore the current state
+        this.app.parameterManager.importParameters(currentState)
+        
+        console.group(`📤 Export State "${stateName}"`)
+        console.log('Copy this JSON to share the state:')
+        console.log('```json')
+        console.log(exportedState)
+        console.log('```')
+        console.log(`💡 In other browser, use: importState('${exportedState}')`)
+        console.groupEnd()
+      } else {
+        console.error(`❌ Failed to export state "${stateName}"`)
+      }
+    } catch (error) {
+      console.error('❌ Failed to export state:', error)
+    }
+  }
+
+  /**
+   * Import state JSON and save it as state "1" (or specified name)
+   */
+  public importState(jsonString: string, stateName: string = '1'): void {
+    if (!this.app.parameterManager) {
+      console.error('❌ Parameter manager not available')
+      return
+    }
+
+    if (!jsonString || jsonString.trim() === '') {
+      console.warn('⚠️ JSON string cannot be empty')
+      console.log('💡 Usage: importState(\'{"categories":...}\', "1")')
+      return
+    }
+
+    try {
+      // Import the parameters
+      const success = this.app.parameterManager.importParameters(jsonString)
+      
+      if (success) {
+        // Save as the specified state name
+        this.app.parameterManager.saveState(stateName)
+        
+        // Update all systems
+        if (this.app.parameterIntegration) {
+          this.app.parameterIntegration.updateAllSystems()
+        }
+        
+        console.log(`✅ State imported and saved as "${stateName}"`)
+        console.log('🔄 All systems updated with imported parameters')
+        
+        if (stateName === '1') {
+          console.log('⭐ This is now your default startup state!')
+        }
+      } else {
+        console.error('❌ Failed to import parameters - invalid JSON format')
+      }
+    } catch (error) {
+      console.error('❌ Failed to import state:', error)
+      console.log('💡 Make sure the JSON is valid and properly formatted')
+    }
+  }
+
+  /**
+   * Quick share: Export state "1" for easy sharing
+   */
+  public shareDefaultState(): void {
+    console.log('📤 Sharing default state "1"...')
+    this.exportState('1')
+  }
+
+  /**
+   * Create state "1" from hardcoded optimal defaults
+   */
+  public createOptimalDefault(): void {
+    if (!this.app.parameterManager) {
+      console.error('❌ Parameter manager not available')
+      return
+    }
+
+    // Define optimal default parameters
+    const optimalDefaults = {
+      "categories": {
+        "ocean": {
+          "parameters": [
+            { "id": "amplitude", "value": 0.3 },
+            { "id": "windDirection", "value": { "x": 1, "y": 0, "z": 0.5 } },
+            { "id": "windStrength", "value": 1.2 },
+            { "id": "waveLength", "value": 2.5 },
+            { "id": "waveSpeed", "value": 1.0 },
+            { "id": "waterColor", "value": "#006994" },
+            { "id": "deepWaterColor", "value": "#003366" },
+            { "id": "foamColor", "value": "#ffffff" },
+            { "id": "transparency", "value": 0.8 },
+            { "id": "reflectionStrength", "value": 0.6 }
+          ]
+        },
+        "land": {
+          "parameters": [
+            { "id": "elevation", "value": 8.0 },
+            { "id": "roughness", "value": 1.2 },
+            { "id": "scale", "value": 0.8 },
+            { "id": "landColor", "value": "#4a7c59" },
+            { "id": "rockColor", "value": "#8b7355" },
+            { "id": "sandColor", "value": "#c2b280" },
+            { "id": "moisture", "value": 0.3 },
+            { "id": "islandRadius", "value": 35.0 },
+            { "id": "coastSmoothness", "value": 8.0 },
+            { "id": "seaLevel", "value": -4.0 }
+          ]
+        },
+        "sky": {
+          "parameters": [
+            { "id": "turbidity", "value": 10 },
+            { "id": "rayleigh", "value": 3 },
+            { "id": "mieCoefficient", "value": 0.005 },
+            { "id": "mieDirectionalG", "value": 0.7 },
+            { "id": "elevation", "value": 15 },
+            { "id": "azimuth", "value": 180 },
+            { "id": "exposure", "value": 0.5 }
+          ]
+        },
+        "lighting": {
+          "parameters": [
+            { "id": "shadowMapSize", "value": 4096 },
+            { "id": "shadowRadius", "value": 10 },
+            { "id": "shadowBlur", "value": 25 },
+            { "id": "sunIntensity", "value": 1.2 },
+            { "id": "ambientIntensity", "value": 0.3 },
+            { "id": "shadowBias", "value": -0.0001 }
+          ]
+        },
+        "camera": {
+          "parameters": [
+            { "id": "position", "value": { "x": 0, "y": 10, "z": 30 } },
+            { "id": "rotation", "value": { "x": 0, "y": 0, "z": 0 } },
+            { "id": "fov", "value": 75 },
+            { "id": "zoom", "value": 1.0 },
+            { "id": "target", "value": { "x": 0, "y": 0, "z": 0 } }
+          ]
+        },
+        "player": {
+          "parameters": [
+            { "id": "walkSpeed", "value": 8 },
+            { "id": "runSpeed", "value": 16 },
+            { "id": "jumpHeight", "value": 12 },
+            { "id": "mouseSensitivity", "value": 0.002 }
+          ]
+        }
+      }
+    }
+
+    try {
+      const jsonString = JSON.stringify(optimalDefaults)
+      this.importState(jsonString, '1')
+      console.log('✅ Optimal default state "1" created!')
+      console.log('🎯 This provides a good starting point for most projects')
+    } catch (error) {
+      console.error('❌ Failed to create optimal defaults:', error)
+    }
+  }
+
+  /**
+   * Generate code to hardcode current state "1" as system defaults
+   */
+  public generateHardcodedDefaults(): void {
+    if (!this.app.parameterManager) {
+      console.error('❌ Parameter manager not available')
+      return
+    }
+
+    const states = this.app.parameterManager.getSavedStateNames()
+    if (!states.includes('1')) {
+      console.error('❌ State "1" not found. Please create it first with setDefaultState()')
+      return
+    }
+
+    try {
+      // Load state "1" temporarily to get its data
+      const currentState = this.app.parameterManager.exportParameters()
+      const success = this.app.parameterManager.loadState('1')
+      
+      if (success) {
+        const state1Data = JSON.parse(this.app.parameterManager.exportParameters())
+        
+        // Restore current state
+        this.app.parameterManager.importParameters(currentState)
+        
+        console.group('🔧 HARDCODED DEFAULTS GENERATOR')
+        console.log('Copy this code to replace DEFAULT_PARAMETER_SETS in src/systems/ParameterManager.ts:')
+        console.log('')
+        console.log('```typescript')
+        console.log('export const DEFAULT_PARAMETER_SETS: Record<ParameterCategory, ParameterSet> = {')
+        
+        // Generate each category
+        const categories = ['ocean', 'land', 'sky', 'lighting', 'camera', 'player', 'system']
+        
+        categories.forEach((category, index) => {
+          const categoryData = state1Data.categories[category]
+          if (!categoryData) return
+          
+          console.log(`  ${category}: {`)
+          console.log(`    id: '${category}-default',`)
+          console.log(`    name: '${category.charAt(0).toUpperCase() + category.slice(1)} Default',`)
+          console.log(`    description: 'Default ${category} parameters from state "1"',`)
+          console.log(`    version: '1.0.0',`)
+          console.log(`    lastModified: Date.now(),`)
+          console.log(`    parameters: [`)
+          
+          categoryData.parameters.forEach((param: any, paramIndex: number) => {
+            const value = param.value
+            let valueStr = ''
+            
+            if (typeof value === 'string') {
+              valueStr = `'${value}'`
+            } else if (typeof value === 'object' && value !== null) {
+              valueStr = JSON.stringify(value)
+            } else {
+              valueStr = String(value)
+            }
+            
+            // Get parameter definition for additional properties
+            const paramDef = this.getParameterDefinition(category, param.id)
+            
+            console.log(`      { id: '${param.id}', category: '${category}', type: '${paramDef?.type || 'number'}', ${paramDef?.min !== undefined ? `min: ${paramDef.min}, ` : ''}${paramDef?.max !== undefined ? `max: ${paramDef.max}, ` : ''}${paramDef?.step !== undefined ? `step: ${paramDef.step}, ` : ''}defaultValue: ${valueStr}, currentValue: ${valueStr}, description: '${paramDef?.description || param.id}', ${paramDef?.unit ? `unit: '${paramDef.unit}', ` : ''}}${paramIndex < categoryData.parameters.length - 1 ? ',' : ''}`)
+          })
+          
+          console.log(`    ]`)
+          console.log(`  }${index < categories.length - 1 ? ',' : ''}`)
+          console.log('')
+        })
+        
+        console.log('} as const')
+        console.log('```')
+        console.log('')
+        console.log('🎯 This will make your current state "1" the hardcoded default for all browsers!')
+        console.log('💡 After updating the code, all browsers will start with these exact settings')
+        console.groupEnd()
+      } else {
+        console.error('❌ Failed to load state "1"')
+      }
+    } catch (error) {
+      console.error('❌ Failed to generate hardcoded defaults:', error)
+    }
+  }
+
+  /**
+   * Helper to get parameter definition
+   */
+  private getParameterDefinition(category: string, parameterId: string): any {
+    try {
+      // This is a simplified version - in reality you'd need to access the actual parameter definitions
+      const definitions: any = {
+        ocean: {
+          amplitude: { type: 'number', min: 0, max: 2, step: 0.01, description: 'Wave amplitude', unit: 'units' },
+          windDirectionX: { type: 'number', min: -1, max: 1, step: 0.1, description: 'Wind direction X' },
+          windDirectionZ: { type: 'number', min: -1, max: 1, step: 0.1, description: 'Wind direction Z' },
+          windStrength: { type: 'number', min: 0, max: 3, step: 0.1, description: 'Wind strength', unit: 'units' },
+          waveLength: { type: 'number', min: 0.5, max: 5, step: 0.1, description: 'Wave length', unit: 'units' },
+          waveSpeed: { type: 'number', min: 0.1, max: 3, step: 0.1, description: 'Wave speed', unit: 'units/s' },
+          waterColor: { type: 'color', description: 'Shallow water color' },
+          deepWaterColor: { type: 'color', description: 'Deep water color' },
+          foamColor: { type: 'color', description: 'Foam color' },
+          transparency: { type: 'number', min: 0, max: 1, step: 0.01, description: 'Water transparency' },
+          reflectionStrength: { type: 'number', min: 0, max: 1, step: 0.01, description: 'Reflection strength' }
+        },
+        land: {
+          elevation: { type: 'number', min: 0, max: 20, step: 0.1, description: 'Terrain elevation', unit: 'units' },
+          roughness: { type: 'number', min: 0, max: 3, step: 0.1, description: 'Terrain roughness' },
+          scale: { type: 'number', min: 0.1, max: 8, step: 0.1, description: 'Terrain scale' },
+          landColor: { type: 'color', description: 'Land color' },
+          rockColor: { type: 'color', description: 'Rock color' },
+          sandColor: { type: 'color', description: 'Sand color' },
+          moisture: { type: 'number', min: 0, max: 1, step: 0.01, description: 'Moisture level' },
+          islandRadius: { type: 'number', min: 5, max: 150, step: 1, description: 'Island radius', unit: 'units' },
+          coastSmoothness: { type: 'number', min: 1, max: 30, step: 0.5, description: 'Coast smoothness' },
+          seaLevel: { type: 'number', min: -15, max: 2, step: 0.1, description: 'Sea level', unit: 'units' }
+        },
+        sky: {
+          turbidity: { type: 'number', min: 0, max: 20, step: 0.1, description: 'Atmospheric turbidity' },
+          rayleigh: { type: 'number', min: 0, max: 4, step: 0.001, description: 'Rayleigh scattering coefficient' },
+          mieCoefficient: { type: 'number', min: 0, max: 0.1, step: 0.001, description: 'Mie scattering coefficient' },
+          mieDirectionalG: { type: 'number', min: 0, max: 1, step: 0.001, description: 'Mie scattering direction' },
+          elevation: { type: 'number', min: -90, max: 90, step: 0.1, description: 'Sun elevation', unit: 'degrees' },
+          azimuth: { type: 'number', min: -180, max: 180, step: 0.1, description: 'Sun azimuth', unit: 'degrees' },
+          exposure: { type: 'number', min: 0, max: 1, step: 0.01, description: 'Sky exposure' }
+        },
+        lighting: {
+          shadowMapSize: { type: 'number', min: 512, max: 8192, step: 512, description: 'Shadow map resolution', unit: 'pixels' },
+          shadowRadius: { type: 'number', min: 1, max: 25, step: 1, description: 'Shadow radius', unit: 'units' },
+          shadowBlur: { type: 'number', min: 1, max: 50, step: 1, description: 'Shadow blur amount' },
+          sunIntensity: { type: 'number', min: 0, max: 3, step: 0.1, description: 'Sun light intensity' },
+          ambientIntensity: { type: 'number', min: 0, max: 1, step: 0.01, description: 'Ambient light intensity' },
+          shadowBias: { type: 'number', min: -0.01, max: 0.01, step: 0.0001, description: 'Shadow bias' }
+        },
+        camera: {
+          position: { type: 'vector3', description: 'Camera position' },
+          rotation: { type: 'euler', description: 'Camera rotation' },
+          fov: { type: 'number', min: 10, max: 150, step: 1, description: 'Field of view', unit: 'degrees' },
+          zoom: { type: 'number', min: 0.1, max: 5, step: 0.1, description: 'Camera zoom' },
+          target: { type: 'vector3', description: 'Camera target' }
+        },
+        player: {
+          walkSpeed: { type: 'number', min: 1, max: 20, step: 0.5, description: 'Walk speed', unit: 'units/s' },
+          runSpeed: { type: 'number', min: 5, max: 40, step: 1, description: 'Run speed', unit: 'units/s' },
+          jumpHeight: { type: 'number', min: 5, max: 30, step: 1, description: 'Jump height', unit: 'units' },
+          mouseSensitivity: { type: 'number', min: 0.0001, max: 0.01, step: 0.0001, description: 'Mouse sensitivity' }
+        }
+      }
+      
+      return definitions[category]?.[parameterId] || { type: 'number', description: parameterId }
+    } catch (error) {
+      return { type: 'number', description: parameterId }
     }
   }
 

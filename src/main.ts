@@ -1162,6 +1162,29 @@ class IntegratedThreeJSApp {
         landPieces: this.landSystem?.getLandPieces().length || 0
       }
     }
+    
+    // Rendering optimization analysis functions
+    ;(window as any).analyzePerformance = () => {
+      if (this.consoleCommands) {
+        this.consoleCommands.analyzeRenderingPerformance()
+      } else {
+        console.warn('❌ ConsoleCommands not available')
+      }
+    }
+    ;(window as any).showObjectBreakdown = () => {
+      if (this.consoleCommands) {
+        this.consoleCommands.showObjectBreakdown()
+      } else {
+        console.warn('❌ ConsoleCommands not available')
+      }
+    }
+    ;(window as any).simulateInstancing = () => {
+      if (this.consoleCommands) {
+        this.consoleCommands.simulateInstancing()
+      } else {
+        console.warn('❌ ConsoleCommands not available')
+      }
+    }
   }
 
   private checkDebugMode(): void {
@@ -1377,10 +1400,28 @@ class IntegratedThreeJSApp {
       // logger.info(LogModule.SYSTEM, `Player speeds synced: walk=${walkSpeed}, run=${runSpeed}`)
     }
     
-    // Save current parameters as first state if no saved states exist
-    if (this.parameterManager.getSavedStateNames().length === 0) {
+    // Load state "1" as default, or create it if it doesn't exist
+    const savedStates = this.parameterManager.getSavedStateNames()
+    if (savedStates.includes('1')) {
+      // Load state "1" as default
+      const loaded = this.parameterManager.loadState('1')
+      if (loaded) {
+        // Update all systems with loaded parameters
+        this.parameterIntegration.updateAllSystems()
+        logger.info(LogModule.SYSTEM, 'Load state "1" applied as default startup state')
+      } else {
+        logger.warn(LogModule.SYSTEM, 'Failed to load state "1", using current parameters')
+      }
+    } else {
+      // Create state "1" with current parameters as the new default
+      this.parameterManager.saveState('1')
+      logger.info(LogModule.SYSTEM, 'Created state "1" as default startup state with current parameters')
+    }
+    
+    // Also save an 'initial' state for reference if no saved states exist
+    if (savedStates.length === 0) {
       this.parameterManager.saveState('initial')
-      logger.info(LogModule.SYSTEM, 'Initial parameters saved as first state')
+      logger.info(LogModule.SYSTEM, 'Initial parameters also saved as "initial" state for reference')
     }
     
     // console.log('🔄 All objects created via ObjectLoader, positions loaded via ObjectManager')
