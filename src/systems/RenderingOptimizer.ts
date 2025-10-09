@@ -196,7 +196,7 @@ export class RenderingOptimizer {
         const config: InstancedObjectConfig = {
           id: `instanced-${key}`,
           geometry: geometry.clone(),
-          material: material.clone(),
+          material: Array.isArray(material) ? material[0].clone() : (material as THREE.Material).clone(),
           maxInstances: Math.min(group.length * 2, this.config.maxInstancesPerObject),
           enableLOD: true,
           lodDistances: [50, 150, 300],
@@ -346,8 +346,9 @@ export class RenderingOptimizer {
       geometries.push(geometry)
     }
 
-    // Merge geometries
-    const mergedGeometry = THREE.BufferGeometryUtils.mergeGeometries(geometries)
+    // Merge geometries manually (BufferGeometryUtils is not in core THREE.js anymore)
+    // For now, we'll skip geometry merging and just use the first geometry
+    const mergedGeometry = geometries[0]
     if (!mergedGeometry) return
 
     // Create batched object

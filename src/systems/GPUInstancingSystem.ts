@@ -349,7 +349,7 @@ export class GPUInstancingSystem {
       this.createInstancedObject({
         id: `${objectId}-${key}`,
         geometry: firstObj.geometry,
-        material: firstObj.material,
+        material: Array.isArray(firstObj.material) ? firstObj.material[0] : firstObj.material as THREE.Material,
         maxInstances: groupObjects.length * 2, // Allow for growth
         frustumCulling: true
       })
