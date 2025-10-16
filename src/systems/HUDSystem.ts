@@ -29,6 +29,22 @@ export interface HUDData {
     leftButton: boolean
     rightButton: boolean
   }
+  gamepad?: {
+    connected: boolean
+    id: string
+    leftStick: { x: number; y: number }
+    rightStick: { x: number; y: number }
+    buttons: {
+      a: boolean
+      b: boolean
+      x: boolean
+      y: boolean
+      lb: boolean
+      rb: boolean
+      lt: number
+      rt: number
+    }
+  }
   
   // System states
   mode: string
@@ -95,7 +111,11 @@ export class HUDSystem {
       { id: 'keys-other', label: 'Space/Shift/C', value: '---' },
       { id: 'mouse-pos', label: 'Mouse', value: '0, 0' },
       { id: 'mouse-buttons', label: 'Buttons', value: '--' },
-      { id: 'mouse-mode', label: 'Mouse Mode', value: 'Camera Look' }
+      { id: 'mouse-mode', label: 'Mouse Mode', value: 'Camera Look' },
+      { id: 'gamepad-status', label: 'Gamepad', value: 'Not Connected' },
+      { id: 'gamepad-sticks', label: 'Sticks L/R', value: '(0,0) / (0,0)' },
+      { id: 'gamepad-buttons', label: 'Xbox Buttons', value: 'A:- B:- X:- Y:-' },
+      { id: 'gamepad-triggers', label: 'Triggers L/R', value: '0.0 / 0.0' }
     ])
 
     // System info panel
@@ -383,6 +403,50 @@ export class HUDSystem {
     if (this.data.mode) {
       const mouseFunctionality = this.getMouseFunctionality(this.data.mode.toLowerCase())
       this.updateElement('mouse-mode', mouseFunctionality)
+    }
+
+    // Update gamepad display
+    if (this.data.gamepad) {
+      if (this.data.gamepad.connected) {
+        // Gamepad status
+        const gamepadName = this.data.gamepad.id.includes('Xbox') ? 'Xbox Controller' : 
+                           this.data.gamepad.id.includes('PlayStation') ? 'PlayStation Controller' : 
+                           'Gamepad'
+        this.updateElement('gamepad-status', gamepadName, 'good')
+        
+        // Stick positions
+        const leftStick = `(${this.data.gamepad.leftStick.x.toFixed(1)},${this.data.gamepad.leftStick.y.toFixed(1)})`
+        const rightStick = `(${this.data.gamepad.rightStick.x.toFixed(1)},${this.data.gamepad.rightStick.y.toFixed(1)})`
+        this.updateElement('gamepad-sticks', `${leftStick} / ${rightStick}`, 
+          (Math.abs(this.data.gamepad.leftStick.x) > 0.1 || Math.abs(this.data.gamepad.leftStick.y) > 0.1 ||
+           Math.abs(this.data.gamepad.rightStick.x) > 0.1 || Math.abs(this.data.gamepad.rightStick.y) > 0.1) ? 'active' : '')
+        
+        // Button states
+        const buttons = [
+          `A:${this.data.gamepad.buttons.a ? '●' : '-'}`,
+          `B:${this.data.gamepad.buttons.b ? '●' : '-'}`,
+          `X:${this.data.gamepad.buttons.x ? '●' : '-'}`,
+          `Y:${this.data.gamepad.buttons.y ? '●' : '-'}`
+        ].join(' ')
+        this.updateElement('gamepad-buttons', buttons, 
+          (this.data.gamepad.buttons.a || this.data.gamepad.buttons.b || 
+           this.data.gamepad.buttons.x || this.data.gamepad.buttons.y) ? 'active' : '')
+        
+        // Trigger values
+        const triggers = `${this.data.gamepad.buttons.lt.toFixed(1)} / ${this.data.gamepad.buttons.rt.toFixed(1)}`
+        this.updateElement('gamepad-triggers', triggers, 
+          (this.data.gamepad.buttons.lt > 0.1 || this.data.gamepad.buttons.rt > 0.1) ? 'active' : '')
+      } else {
+        this.updateElement('gamepad-status', 'Not Connected', 'warning')
+        this.updateElement('gamepad-sticks', '(0,0) / (0,0)', '')
+        this.updateElement('gamepad-buttons', 'A:- B:- X:- Y:-', '')
+        this.updateElement('gamepad-triggers', '0.0 / 0.0', '')
+      }
+    } else {
+      this.updateElement('gamepad-status', 'Not Detected', 'error')
+      this.updateElement('gamepad-sticks', '(0,0) / (0,0)', '')
+      this.updateElement('gamepad-buttons', 'A:- B:- X:- Y:-', '')
+      this.updateElement('gamepad-triggers', '0.0 / 0.0', '')
     }
 
     // Update system info

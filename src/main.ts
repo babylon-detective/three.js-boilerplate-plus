@@ -19,6 +19,7 @@ import { logger, LogModule } from './systems/Logger'
 import { performanceMonitor } from './systems/PerformanceMonitor'
 import { DebugGUIManager } from './systems/DebugGUIManager'
 import { HUDSystem, HUDData } from './systems/HUDSystem'
+import { InputSystem, GamepadInputHandler } from './systems/InputSystem'
 import { SHADERS, ShaderPath } from './shaderImports'
 
 // TSL (Three Shader Language) - works with both WebGL and WebGPU!
@@ -910,6 +911,8 @@ class IntegratedThreeJSApp {
   private parameterGUI!: ParameterGUI
   private parameterIntegration!: ParameterIntegration
   private hudSystem!: HUDSystem
+  private inputSystem!: InputSystem
+  private gamepadHandler!: GamepadInputHandler
   
   // Timing for delta time calculation
   private lastTime: number = 0
@@ -977,6 +980,10 @@ class IntegratedThreeJSApp {
     })
     // Initialize HUD system
     this.hudSystem = new HUDSystem()
+    
+    // Initialize Input system
+    this.inputSystem = new InputSystem(this.renderer.domElement as HTMLCanvasElement)
+    
     // Parameter integration will be initialized after all systems are created
     
     // Initialize player controller with collision system and camera manager
@@ -997,6 +1004,12 @@ class IntegratedThreeJSApp {
           airResistance: 0.95
         }
       )
+    
+    // Initialize gamepad handler and connect to player controller
+    this.gamepadHandler = this.inputSystem.createGamepadHandler((input) => {
+      this.playerController.handleGamepadInput(input)
+    })
+    this.inputSystem.addHandler(this.gamepadHandler)
     
     // Register camera with ObjectManager for persistence
     this.objectManager.registerCamera(this.camera, this.controls)
@@ -2188,6 +2201,33 @@ class IntegratedThreeJSApp {
         leftButton: inputState.mouseLeft || false,
         rightButton: inputState.mouseRight || false
       },
+      
+      // Gamepad state
+      gamepad: this.inputSystem.isGamepadConnected() ? (() => {
+        const gamepadState = this.inputSystem.getGamepadState()!
+        return {
+          connected: gamepadState.connected,
+          id: gamepadState.id,
+          leftStick: {
+            x: gamepadState.axes.leftStickX,
+            y: gamepadState.axes.leftStickY
+          },
+          rightStick: {
+            x: gamepadState.axes.rightStickX,
+            y: gamepadState.axes.rightStickY
+          },
+          buttons: {
+            a: gamepadState.buttons.a,
+            b: gamepadState.buttons.b,
+            x: gamepadState.buttons.x,
+            y: gamepadState.buttons.y,
+            lb: gamepadState.buttons.lb,
+            rb: gamepadState.buttons.rb,
+            lt: gamepadState.buttons.lt,
+            rt: gamepadState.buttons.rt
+          }
+        }
+      })() : undefined,
       
       // System states
       mode: this.cameraManager.getCurrentMode(),

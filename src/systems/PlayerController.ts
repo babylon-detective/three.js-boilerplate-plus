@@ -42,6 +42,9 @@ export interface PlayerInput {
   jump: boolean
   run: boolean
   camera: boolean // 'C' key for camera mode switching
+  // Analog input for gamepad (0-1 values)
+  analogMovement?: THREE.Vector2
+  analogCamera?: THREE.Vector2
 }
 
 // ============================================================================
@@ -73,6 +76,23 @@ export class PlayerController {
   private keyStates: Map<string, boolean> = new Map()
   private boundKeyDown: (event: KeyboardEvent) => void
   private boundKeyUp: (event: KeyboardEvent) => void
+  
+  // Gamepad input
+  private gamepadInput: {
+    movement: THREE.Vector2
+    camera: THREE.Vector2
+    jump: boolean
+    run: boolean
+    action: boolean
+    cameraMode: boolean
+  } = {
+    movement: new THREE.Vector2(),
+    camera: new THREE.Vector2(),
+    jump: false,
+    run: false,
+    action: false,
+    cameraMode: false
+  }
   
   constructor(
     scene: THREE.Scene,
@@ -223,17 +243,62 @@ export class PlayerController {
   }
 
   private updateInputState(): void {
-    this.input.forward = this.keyStates.get('KeyW') || false
-    this.input.backward = this.keyStates.get('KeyS') || false
-    this.input.left = this.keyStates.get('KeyA') || false
-    this.input.right = this.keyStates.get('KeyD') || false
-    this.input.jump = this.keyStates.get('Space') || false
-    this.input.run = (this.keyStates.get('ShiftLeft') || this.keyStates.get('ShiftRight')) || false
-    this.input.camera = this.keyStates.get('KeyC') || false
+    // Keyboard input
+    const keyForward = this.keyStates.get('KeyW') || false
+    const keyBackward = this.keyStates.get('KeyS') || false
+    const keyLeft = this.keyStates.get('KeyA') || false
+    const keyRight = this.keyStates.get('KeyD') || false
+    const keyJump = this.keyStates.get('Space') || false
+    const keyRun = (this.keyStates.get('ShiftLeft') || this.keyStates.get('ShiftRight')) || false
+    const keyCamera = this.keyStates.get('KeyC') || false
+    
+    // Gamepad input (analog movement converted to digital)
+    const gamepadForward = this.gamepadInput.movement.y > 0.1
+    const gamepadBackward = this.gamepadInput.movement.y < -0.1
+    const gamepadLeft = this.gamepadInput.movement.x < -0.1
+    const gamepadRight = this.gamepadInput.movement.x > 0.1
+    
+    // Combine keyboard and gamepad input (OR logic - either input works)
+    this.input.forward = keyForward || gamepadForward
+    this.input.backward = keyBackward || gamepadBackward
+    this.input.left = keyLeft || gamepadLeft
+    this.input.right = keyRight || gamepadRight
+    this.input.jump = keyJump || this.gamepadInput.jump
+    this.input.run = keyRun || this.gamepadInput.run
+    this.input.camera = keyCamera || this.gamepadInput.cameraMode
+    
+    // Store analog values for smooth movement
+    this.input.analogMovement = this.gamepadInput.movement.clone()
+    this.input.analogCamera = this.gamepadInput.camera.clone()
     
     // Debug: Log input state occasionally
-    if (Math.random() < 0.1) { // 10% chance per frame
+    if (Math.random() < 0.01) { // 1% chance per frame to reduce spam
       console.log(`🎮 Input: forward=${this.input.forward}, backward=${this.input.backward}, left=${this.input.left}, right=${this.input.right}, run=${this.input.run}, camera=${this.input.camera}`)
+      if (this.gamepadInput.movement.length() > 0.1) {
+        console.log(`🎮 Gamepad movement: x=${this.gamepadInput.movement.x.toFixed(2)}, y=${this.gamepadInput.movement.y.toFixed(2)}`)
+      }
+    }
+  }
+
+  // ============================================================================
+  // GAMEPAD INPUT HANDLING
+  // ============================================================================
+  
+  public handleGamepadInput(input: {
+    movement: THREE.Vector2
+    camera: THREE.Vector2
+    jump: boolean
+    run: boolean
+    action: boolean
+    cameraMode: boolean
+  }): void {
+    this.gamepadInput = {
+      movement: input.movement.clone(),
+      camera: input.camera.clone(),
+      jump: input.jump,
+      run: input.run,
+      action: input.action,
+      cameraMode: input.cameraMode
     }
   }
 
@@ -268,25 +333,52 @@ export class PlayerController {
     // Create movement direction
     const moveDirection = new THREE.Vector3()
     
-    if (this.input.forward) {
-      moveDirection.add(cameraDirection.clone().setY(0).normalize())
-    }
-    if (this.input.backward) {
-      moveDirection.sub(cameraDirection.clone().setY(0).normalize())
-    }
-    if (this.input.left) {
-      moveDirection.sub(cameraDirection.clone().setY(0).cross(new THREE.Vector3(0, 1, 0)).normalize())
-    }
-    if (this.input.right) {
-      moveDirection.add(cameraDirection.clone().setY(0).cross(new THREE.Vector3(0, 1, 0)).normalize())
+    // Check if we have analog gamepad input
+    const hasAnalogInput = this.input.analogMovement && this.input.analogMovement.length() > 0.1
+    
+    if (hasAnalogInput) {
+      // Use analog gamepad input for smooth movement
+      const analogX = this.input.analogMovement!.x
+      const analogY = this.input.analogMovement!.y
+      
+      // Forward/backward based on analog Y
+      if (Math.abs(analogY) > 0.1) {
+        const forwardDir = cameraDirection.clone().setY(0).normalize()
+        moveDirection.add(forwardDir.multiplyScalar(analogY))
+      }
+      
+      // Left/right based on analog X
+      if (Math.abs(analogX) > 0.1) {
+        const rightDir = cameraDirection.clone().setY(0).cross(new THREE.Vector3(0, 1, 0)).normalize()
+        moveDirection.add(rightDir.multiplyScalar(analogX))
+      }
+    } else {
+      // Use digital keyboard/button input
+      if (this.input.forward) {
+        moveDirection.add(cameraDirection.clone().setY(0).normalize())
+      }
+      if (this.input.backward) {
+        moveDirection.sub(cameraDirection.clone().setY(0).normalize())
+      }
+      if (this.input.left) {
+        moveDirection.sub(cameraDirection.clone().setY(0).cross(new THREE.Vector3(0, 1, 0)).normalize())
+      }
+      if (this.input.right) {
+        moveDirection.add(cameraDirection.clone().setY(0).cross(new THREE.Vector3(0, 1, 0)).normalize())
+      }
     }
     
     // Apply movement
     if (moveDirection.length() > 0) {
+      // For analog input, preserve the magnitude for variable speed
+      const inputMagnitude = hasAnalogInput ? Math.min(this.input.analogMovement!.length(), 1.0) : 1.0
+      
+      // Normalize direction but preserve analog magnitude
       moveDirection.normalize()
       
       // Determine speed
-      const speed = this.input.run ? this.config.runSpeed : this.config.walkSpeed
+      const baseSpeed = this.input.run ? this.config.runSpeed : this.config.walkSpeed
+      const speed = baseSpeed * inputMagnitude // Scale by analog input magnitude
       const movement = moveDirection.multiplyScalar(speed * deltaTime)
       
       // Apply horizontal movement

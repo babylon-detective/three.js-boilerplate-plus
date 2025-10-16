@@ -8,6 +8,38 @@ type InputEventType =
   | 'wheel' 
   | 'touchstart' | 'touchmove' | 'touchend'
   | 'gesturestart' | 'gesturechange' | 'gestureend'
+  | 'gamepad'
+
+// Xbox controller button mapping
+interface GamepadState {
+  buttons: {
+    a: boolean          // 0 - Jump
+    b: boolean          // 1 - Run/Sprint
+    x: boolean          // 2 - Action
+    y: boolean          // 3 - Camera mode
+    lb: boolean         // 4 - Left bumper
+    rb: boolean         // 5 - Right bumper
+    lt: number          // 6 - Left trigger (0-1)
+    rt: number          // 7 - Right trigger (0-1)
+    select: boolean     // 8 - Select/Back
+    start: boolean      // 9 - Start/Menu
+    ls: boolean         // 10 - Left stick click
+    rs: boolean         // 11 - Right stick click
+    dpadUp: boolean     // 12 - D-pad up
+    dpadDown: boolean   // 13 - D-pad down
+    dpadLeft: boolean   // 14 - D-pad left
+    dpadRight: boolean  // 15 - D-pad right
+  }
+  axes: {
+    leftStickX: number    // 0 - Left stick horizontal (-1 to 1)
+    leftStickY: number    // 1 - Left stick vertical (-1 to 1)
+    rightStickX: number   // 2 - Right stick horizontal (-1 to 1)
+    rightStickY: number   // 3 - Right stick vertical (-1 to 1)
+  }
+  connected: boolean
+  index: number
+  id: string
+}
 
 // Discriminated union for different input events
 type InputEvent = 
@@ -16,6 +48,7 @@ type InputEvent =
   | { type: 'wheel'; event: WheelEvent; delta: number }
   | { type: 'touch'; event: TouchEvent; touches: TouchPoint[] }
   | { type: 'gesture'; event: any; scale: number; rotation: number }
+  | { type: 'gamepad'; gamepad: GamepadState }
 
 // Touch point interface
 interface TouchPoint {
@@ -37,6 +70,7 @@ interface InputState {
     rotation: number
     active: boolean
   }
+  gamepad: GamepadState | null
 }
 
 // Device capability detection
@@ -241,6 +275,89 @@ class CameraControlHandler extends BaseInputHandler {
   }
 }
 
+// Xbox Controller Input Handler
+class GamepadInputHandler extends BaseInputHandler {
+  public priority = 15 // Higher priority than camera controls
+
+  private deadzone = 0.1
+  private previousState: GamepadState | null = null
+
+  constructor(
+    private onPlayerInput?: (input: {
+      movement: THREE.Vector2
+      camera: THREE.Vector2
+      jump: boolean
+      run: boolean
+      action: boolean
+      cameraMode: boolean
+    }) => void
+  ) {
+    super()
+  }
+
+  public handleInput(event: InputEvent, state: Readonly<InputState>): void {
+    if (event.type === 'gamepad') {
+      this.handleGamepadInput(event.gamepad)
+    }
+  }
+
+  private handleGamepadInput(gamepad: GamepadState): void {
+    if (!gamepad.connected) return
+
+    // Apply deadzone to stick inputs
+    const leftStickX = this.applyDeadzone(gamepad.axes.leftStickX)
+    const leftStickY = this.applyDeadzone(-gamepad.axes.leftStickY) // Invert Y for forward/backward
+    const rightStickX = this.applyDeadzone(gamepad.axes.rightStickX)
+    const rightStickY = this.applyDeadzone(-gamepad.axes.rightStickY) // Invert Y for camera
+
+    // Create movement vector from left stick or D-pad
+    const movement = new THREE.Vector2(leftStickX, leftStickY)
+    
+    // Add D-pad input (digital movement)
+    if (gamepad.buttons.dpadLeft) movement.x = -1
+    if (gamepad.buttons.dpadRight) movement.x = 1
+    if (gamepad.buttons.dpadUp) movement.y = 1
+    if (gamepad.buttons.dpadDown) movement.y = -1
+
+    // Camera control from right stick
+    const camera = new THREE.Vector2(rightStickX, rightStickY)
+
+    // Button states
+    const jump = gamepad.buttons.a
+    const run = gamepad.buttons.b || gamepad.rt > 0.5 // B button or right trigger
+    const action = gamepad.buttons.x
+    const cameraMode = this.wasButtonPressed('y', gamepad) // Y button for camera mode toggle
+
+    // Send processed input to player controller
+    if (this.onPlayerInput) {
+      this.onPlayerInput({
+        movement,
+        camera,
+        jump,
+        run,
+        action,
+        cameraMode
+      })
+    }
+
+    this.previousState = { ...gamepad }
+  }
+
+  private applyDeadzone(value: number): number {
+    return Math.abs(value) < this.deadzone ? 0 : value
+  }
+
+  private wasButtonPressed(button: keyof GamepadState['buttons'], currentState: GamepadState): boolean {
+    const current = currentState.buttons[button]
+    const previous = this.previousState?.buttons[button] || false
+    return current && !previous
+  }
+
+  public setDeadzone(deadzone: number): void {
+    this.deadzone = Math.max(0, Math.min(1, deadzone))
+  }
+}
+
 // Object interaction handler
 class ObjectInteractionHandler extends BaseInputHandler {
   public priority = 5
@@ -300,15 +417,22 @@ export class InputSystem {
     keys: new Set(),
     wheelDelta: 0,
     touches: new Map(),
-    gesture: { scale: 1, rotation: 0, active: false }
+    gesture: { scale: 1, rotation: 0, active: false },
+    gamepad: null
   }
   private capabilities: DeviceCapabilities
   private boundEventListeners: Map<string, EventListener> = new Map()
+  private gamepadPollingInterval: number | null = null
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
     this.capabilities = this.detectCapabilities()
     this.setupEventListeners()
+    
+    // Start gamepad polling if supported
+    if (this.capabilities.hasGamepad) {
+      this.startGamepadPolling()
+    }
   }
 
   private detectCapabilities(): DeviceCapabilities {
@@ -322,6 +446,74 @@ export class InputSystem {
       hasGamepad: 'getGamepads' in navigator,
       maxTouchPoints: nav.maxTouchPoints || 0,
       isAppleDevice: /iPad|iPhone|iPod|Mac/.test(navigator.userAgent)
+    }
+  }
+
+  private startGamepadPolling(): void {
+    // Poll gamepad state at 60fps
+    this.gamepadPollingInterval = window.setInterval(() => {
+      this.pollGamepads()
+    }, 16) // ~60fps
+  }
+
+  private pollGamepads(): void {
+    const gamepads = navigator.getGamepads()
+    
+    // Find the first connected gamepad (typically Xbox controller)
+    for (let i = 0; i < gamepads.length; i++) {
+      const gamepad = gamepads[i]
+      if (gamepad && gamepad.connected) {
+        const gamepadState = this.parseGamepadState(gamepad)
+        
+        // Update state
+        this.state.gamepad = gamepadState
+        
+        // Dispatch gamepad event
+        const inputEvent: InputEvent = {
+          type: 'gamepad',
+          gamepad: gamepadState
+        }
+        
+        this.dispatchToHandlers(inputEvent)
+        break // Use first connected gamepad only
+      }
+    }
+    
+    // If no gamepad found, clear state
+    if (!this.state.gamepad?.connected) {
+      this.state.gamepad = null
+    }
+  }
+
+  private parseGamepadState(gamepad: Gamepad): GamepadState {
+    return {
+      buttons: {
+        a: gamepad.buttons[0]?.pressed || false,
+        b: gamepad.buttons[1]?.pressed || false,
+        x: gamepad.buttons[2]?.pressed || false,
+        y: gamepad.buttons[3]?.pressed || false,
+        lb: gamepad.buttons[4]?.pressed || false,
+        rb: gamepad.buttons[5]?.pressed || false,
+        lt: gamepad.buttons[6]?.value || 0,
+        rt: gamepad.buttons[7]?.value || 0,
+        select: gamepad.buttons[8]?.pressed || false,
+        start: gamepad.buttons[9]?.pressed || false,
+        ls: gamepad.buttons[10]?.pressed || false,
+        rs: gamepad.buttons[11]?.pressed || false,
+        dpadUp: gamepad.buttons[12]?.pressed || false,
+        dpadDown: gamepad.buttons[13]?.pressed || false,
+        dpadLeft: gamepad.buttons[14]?.pressed || false,
+        dpadRight: gamepad.buttons[15]?.pressed || false,
+      },
+      axes: {
+        leftStickX: gamepad.axes[0] || 0,
+        leftStickY: gamepad.axes[1] || 0,
+        rightStickX: gamepad.axes[2] || 0,
+        rightStickY: gamepad.axes[3] || 0,
+      },
+      connected: gamepad.connected,
+      index: gamepad.index,
+      id: gamepad.id
     }
   }
 
@@ -537,6 +729,19 @@ export class InputSystem {
     )
   }
 
+  public createGamepadHandler(
+    onPlayerInput?: (input: {
+      movement: THREE.Vector2
+      camera: THREE.Vector2
+      jump: boolean
+      run: boolean
+      action: boolean
+      cameraMode: boolean
+    }) => void
+  ): GamepadInputHandler {
+    return new GamepadInputHandler(onPlayerInput)
+  }
+
   public getCapabilities(): Readonly<DeviceCapabilities> {
     return this.capabilities
   }
@@ -557,8 +762,22 @@ export class InputSystem {
     return this.state.touches.size
   }
 
+  public getGamepadState(): GamepadState | null {
+    return this.state.gamepad
+  }
+
+  public isGamepadConnected(): boolean {
+    return this.state.gamepad?.connected || false
+  }
+
   // Cleanup
   public dispose(): void {
+    // Stop gamepad polling
+    if (this.gamepadPollingInterval) {
+      clearInterval(this.gamepadPollingInterval)
+      this.gamepadPollingInterval = null
+    }
+
     // Remove all event listeners
     for (const [eventType, listener] of this.boundEventListeners) {
       if (['keydown', 'keyup'].includes(eventType)) {
@@ -580,10 +799,12 @@ export type {
   TouchPoint,
   InputState,
   DeviceCapabilities,
-  InputHandler
+  InputHandler,
+  GamepadState
 }
 export {
   BaseInputHandler,
   CameraControlHandler,
-  ObjectInteractionHandler
+  ObjectInteractionHandler,
+  GamepadInputHandler
 } 
