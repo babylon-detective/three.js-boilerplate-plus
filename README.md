@@ -1,6 +1,6 @@
-# Three.js-Boilerplate-TS-Vite
+# 3D Garden
 
-A Three.js Boilerplate for TypeScript Vite projects with advanced features including ocean LOD system, collision detection, player movement, and comprehensive debugging tools.
+A comprehensive Three.js application with advanced features including Xbox controller support, intelligent terrain collision, ocean LOD system, player movement, HUD interface, and extensive debugging tools.
 
 This boilerplate is supplementary to <!--my book titled [**Three.js and TypeScript**](https://amzn.to/3FahROZ) and--> my **ThreeJS and TypeScript** courses at [Udemy](https://www.udemy.com/course/threejs-tutorials/?referralCode=4C7E1DE91C3E42F69D0F) and [YouTube (Channel membership required)](https://www.youtube.com/playlist?list=PLKWUX7aMnlEKTmkBqwjc-tZgULJdNBjEd)
 
@@ -30,8 +30,8 @@ This enhanced boilerplate includes:
 ## Installing
 
 ```bash
-git clone https://github.com/Sean-Bradley/Three.js-Boilerplate-TS-Vite.git
-cd Three.js-Boilerplate-TS-Vite
+git clone https://github.com/babylon-detective/3D-Garden.git
+cd 3D-Garden
 npm install
 ```
 
@@ -60,7 +60,7 @@ If you forked this repository, then you can publish your changes to GitHub pages
 npm run deploy
 ```
 
-Visit `https://<your github username>.github.io/Three.js-Boilerplate-TS-Vite/`
+Visit `https://<your github username>.github.io/3D-Garden/`
 
 E.g.,
 
