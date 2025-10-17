@@ -212,7 +212,7 @@ export class CameraManager {
     const movementY = event.movementY || 0
 
     this.playerControls.yaw -= movementX * this.playerControls.sensitivity
-    this.playerControls.pitch -= movementY * this.playerControls.sensitivity
+    this.playerControls.pitch -= movementY * this.playerControls.sensitivity  // Standard: Mouse UP = Look UP
 
     // Clamp pitch to prevent over-rotation
     this.playerControls.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.playerControls.pitch))
@@ -364,6 +364,27 @@ export class CameraManager {
    */
   public setPlayerSensitivity(sensitivity: number): void {
     this.playerControls.sensitivity = sensitivity
+  }
+
+  /**
+   * Update player camera rotation from gamepad input
+   * @param deltaX - Right stick horizontal movement (-1 to 1)
+   * @param deltaY - Right stick vertical movement (-1 to 1)
+   * @param deltaTime - Time since last frame in seconds
+   */
+  public updatePlayerCameraFromGamepad(deltaX: number, deltaY: number, deltaTime: number): void {
+    if (!this.playerControls.enabled || this.currentMode !== 'player') {
+      return
+    }
+
+    // Apply gamepad sensitivity (higher than mouse for responsiveness)
+    const gamepadSensitivity = this.playerControls.sensitivity * 100 // Scale up for gamepad
+    
+    this.playerControls.yaw -= deltaX * gamepadSensitivity * deltaTime * 60 // Scale by deltaTime and fps
+    this.playerControls.pitch += deltaY * gamepadSensitivity * deltaTime * 60  // INVERTED: Changed -= to +=
+
+    // Clamp pitch to prevent over-rotation
+    this.playerControls.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.playerControls.pitch))
   }
 
   /**

@@ -109,8 +109,8 @@ export class PlayerController {
       height: 1.8,
       radius: 0.5,
       mass: 70,
-      walkSpeed: 50.0,  // 10x faster (was 5.0)
-      runSpeed: 80.0,   // 10x faster (was 8.0)
+      walkSpeed: 250.0,  // 10x faster (was 25.0)
+      runSpeed: 1200.0,  // 3x sprint speed (was 400.0)
       jumpForce: 8.0,
       gravity: 20.0,
       groundCheckDistance: 0.6,  // Increased from 0.1 for more reliable ground detection
@@ -300,6 +300,10 @@ export class PlayerController {
       action: input.action,
       cameraMode: input.cameraMode
     }
+    
+    // CRITICAL FIX: Update input state immediately when gamepad input changes
+    // This ensures gamepad input is processed even without keyboard events
+    this.updateInputState()
   }
 
   // ============================================================================
@@ -316,7 +320,7 @@ export class PlayerController {
     // Always update physics and visuals
     this.updatePhysics(deltaTime)
     this.updateVisuals()
-    this.updateCamera()
+    this.updateCamera(deltaTime)
     
     // Log state occasionally (commented out to reduce spam)
     // if (Math.random() < 0.01) {
@@ -520,9 +524,23 @@ export class PlayerController {
     }
   }
 
-  private updateCamera(): void {
+  private updateCamera(deltaTime: number): void {
     // Update camera position through camera manager
     this.cameraManager.setPlayerPosition(this.state.position)
+    
+    // Handle gamepad camera rotation (right stick)
+    if (this.input.analogCamera && this.input.analogCamera.length() > 0.1) {
+      const cameraX = this.input.analogCamera.x
+      const cameraY = this.input.analogCamera.y
+      
+      // Apply deadzone
+      const deadzone = 0.1
+      const adjustedX = Math.abs(cameraX) > deadzone ? cameraX : 0
+      const adjustedY = Math.abs(cameraY) > deadzone ? cameraY : 0
+      
+      // Update camera rotation through camera manager
+      this.cameraManager.updatePlayerCameraFromGamepad(adjustedX, adjustedY, deltaTime)
+    }
   }
 
   // ============================================================================

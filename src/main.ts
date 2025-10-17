@@ -996,7 +996,7 @@ class IntegratedThreeJSApp {
           radius: 0.5,
           mass: 70,
           walkSpeed: 250.0,  // 10x faster (was 25.0)
-          runSpeed: 400.0,   // 10x faster (was 40.0)
+          runSpeed: 1200.0,  // 3x sprint speed (was 400.0)
           jumpForce: 15.0,  // Increased for higher jumps
           gravity: 8.0,      // CRITICAL FIX: Reduced from 25.0 to 8.0 for better collision detection
           groundCheckDistance: 0.1,
