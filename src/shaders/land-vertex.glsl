@@ -50,66 +50,34 @@ float fbm(vec2 st) {
 void main() {
     vec3 pos = position;
     
-    // Generate terrain height using fractal noise
+    // No vertex displacement - geometry comes from imported models
+    // Calculate elevation and slope from original geometry for fragment shader
     vec2 noiseCoord = pos.xz * uScale * 0.1;
     
-    // Multiple octaves of noise for dramatic volcanic terrain
+    // Calculate elevation value for texture blending (not actual displacement)
     float height = fbm(noiseCoord) * uElevation;
     height += fbm(noiseCoord * 2.0) * uElevation * 0.6;
     height += fbm(noiseCoord * 4.0) * uElevation * 0.4;
-    height += fbm(noiseCoord * 8.0) * uElevation * 0.2; // Extra detail
+    height += fbm(noiseCoord * 8.0) * uElevation * 0.2;
     
-    // Add ridges for volcanic terrain
+    // Add ridges for texture variation
     float ridgeNoise = abs(noise(noiseCoord * 3.0) - 0.5) * 2.0;
     height += ridgeNoise * uElevation * 0.3;
     
-    // Add some time-based variation for subtle animation
+    // Add time-based variation for texture animation
     height += sin(uTime * 0.1 + pos.x * 0.1) * cos(uTime * 0.1 + pos.z * 0.1) * uRoughness * 0.1;
     
-    // Calculate distance from center for island falloff
-    vec2 center = vec2(0.0, 0.0);
-    float distanceFromCenter = length(pos.xz - center);
-    
-    // Island parameters controlled by uniforms
-    float islandRadius = uIslandRadius;
-    float coastSmoothness = uCoastSmoothness;
-    float seaLevel = uSeaLevel;
-    
-    // Create dramatic volcanic island shape with deep underwater slopes
-    float islandMask = 1.0 - smoothstep(islandRadius - coastSmoothness, islandRadius + coastSmoothness, distanceFromCenter);
-    islandMask = pow(islandMask, 0.7); // Steeper falloff for more dramatic slopes
-    
-    // Apply height with volcanic island falloff
-    float finalHeight = height * islandMask;
-    
-    // Create deep underwater slopes beyond the island
-    float underwaterDepth = seaLevel;
-    if (distanceFromCenter > islandRadius) {
-        float deepWaterFactor = smoothstep(islandRadius, islandRadius * 2.0, distanceFromCenter);
-        underwaterDepth = seaLevel - (deepWaterFactor * abs(seaLevel) * 4.0); // Much deeper edges
-    }
-    
-    // Smooth transition from volcanic peaks to deep ocean floor
-    finalHeight = mix(underwaterDepth, finalHeight, islandMask);
-    
-    pos.y += finalHeight;
-    
-    // Calculate slope for texture blending
-    vec3 tangentX = vec3(1.0, (fbm(noiseCoord + vec2(0.01, 0.0)) - fbm(noiseCoord - vec2(0.01, 0.0))) * uElevation * 100.0, 0.0);
-    vec3 tangentZ = vec3(0.0, (fbm(noiseCoord + vec2(0.0, 0.01)) - fbm(noiseCoord - vec2(0.0, 0.01))) * uElevation * 100.0, 1.0);
-    vec3 calculatedNormal = normalize(cross(tangentZ, tangentX));
-    
-    // Pass data to fragment shader
+    // Pass data to fragment shader (using original geometry normal)
     vPosition = pos;
-    vNormal = calculatedNormal;
+    vNormal = normal;
     vUv = uv;
     vElevation = height;
-    vSlope = 1.0 - dot(calculatedNormal, vec3(0.0, 1.0, 0.0));
+    vSlope = 1.0 - dot(normalize(normal), vec3(0.0, 1.0, 0.0));
     
     // World position for lighting calculations
     vec4 worldPosition = modelMatrix * vec4(pos, 1.0);
     vWorldPosition = worldPosition.xyz;
     
-    // Transform position
+    // Transform position (no displacement applied)
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 } 

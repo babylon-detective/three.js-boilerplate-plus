@@ -72,6 +72,44 @@ export class ConsoleCommands {
     return result
   }
 
+  /**
+   * Unlock multiple objects at once
+   */
+  public unlockObjects(...ids: string[]): void {
+    if (ids.length === 0) {
+      console.warn('⚠️ No object IDs provided')
+      return
+    }
+    
+    console.group(`🔓 Unlocking ${ids.length} object(s)`)
+    let successCount = 0
+    ids.forEach(id => {
+      const result = this.unlockObject(id)
+      if (result) successCount++
+    })
+    console.log(`✅ Successfully unlocked ${successCount}/${ids.length} objects`)
+    console.groupEnd()
+  }
+
+  /**
+   * Lock multiple objects at once
+   */
+  public lockObjects(...ids: string[]): void {
+    if (ids.length === 0) {
+      console.warn('⚠️ No object IDs provided')
+      return
+    }
+    
+    console.group(`🔒 Locking ${ids.length} object(s)`)
+    let successCount = 0
+    ids.forEach(id => {
+      const result = this.lockObject(id)
+      if (result) successCount++
+    })
+    console.log(`✅ Successfully locked ${successCount}/${ids.length} objects`)
+    console.groupEnd()
+  }
+
   public moveObject(id: string, x: number, y: number, z: number, autoLock: boolean = true): boolean {
     let shouldAutoLock = false
     
@@ -772,6 +810,8 @@ export class ConsoleCommands {
 - debugObject(id)                  - Debug specific object
 - lockObject(id)                   - Lock object position
 - unlockObject(id)                 - Unlock object position
+- lockObjects(id1, id2, ...)       - Lock multiple objects at once
+- unlockObjects(id1, id2, ...)     - Unlock multiple objects at once
 - moveObject(id, x, y, z)          - Move object to position
 - clearObjectStates()              - Clear all object states
 - lookAtObject(id)                 - Point camera at object
@@ -932,6 +972,8 @@ export class ConsoleCommands {
     win.debugObject = (id: string) => this.debugObject(id)
     win.lockObject = (id: string) => this.lockObject(id)
     win.unlockObject = (id: string) => this.unlockObject(id)
+    win.lockObjects = (...ids: string[]) => this.lockObjects(...ids)
+    win.unlockObjects = (...ids: string[]) => this.unlockObjects(...ids)
     win.moveObject = (id: string, x: number, y: number, z: number) => this.moveObject(id, x, y, z)
     win.lookAtObject = (id: string) => this.lookAtObject(id)
     // Scale and rotation methods can be added later

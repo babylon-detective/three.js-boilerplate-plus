@@ -58,7 +58,7 @@ export interface HUDData {
 
 export class HUDSystem {
   private container: HTMLElement
-  private isVisible: boolean = true
+  private isVisible: boolean = false // Start hidden by default
   private data: Partial<HUDData> = {}
   private updateCallbacks: Map<string, () => void> = new Map()
   
@@ -76,7 +76,10 @@ export class HUDSystem {
     this.setupEventListeners()
     this.setupStyles()
     
-    console.log('🖥️ HUD System initialized')
+    // Hide HUD by default on initialization
+    this.container.classList.add('hidden')
+    
+    console.log('🖥️ HUD System initialized (hidden by default)')
   }
 
   /**

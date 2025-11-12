@@ -74,8 +74,9 @@ export class CameraManager {
     const aspect = window.innerWidth / window.innerHeight
     
     // System Camera (for debugging and free observation)
+    // Position camera at horizon level to look horizontally instead of down
     this.systemCamera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000)
-    this.systemCamera.position.set(0, 5, 10)
+    this.systemCamera.position.set(0, 2, 10) // Y=2 for horizon level (was 5, looking down)
     this.systemCamera.name = 'SystemCamera'
     
     // Player Camera (first-person view)
@@ -97,6 +98,11 @@ export class CameraManager {
     this.orbitControls.maxDistance = 1000
     this.orbitControls.maxPolarAngle = Math.PI * 0.95
     this.orbitControls.minPolarAngle = Math.PI * 0.05
+    
+    // Set target at horizon level (same Y as camera) to look horizontally
+    // This makes the camera look at the horizon instead of down at the ground
+    this.orbitControls.target.set(0, 2, 0) // Target at horizon level (was 0,0,0)
+    this.orbitControls.update() // Update controls to apply the target
     
     // Player controls configuration
     this.playerControls = {

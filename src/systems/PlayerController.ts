@@ -271,13 +271,13 @@ export class PlayerController {
     this.input.analogMovement = this.gamepadInput.movement.clone()
     this.input.analogCamera = this.gamepadInput.camera.clone()
     
-    // Debug: Log input state occasionally
-    if (Math.random() < 0.01) { // 1% chance per frame to reduce spam
-      console.log(`🎮 Input: forward=${this.input.forward}, backward=${this.input.backward}, left=${this.input.left}, right=${this.input.right}, run=${this.input.run}, camera=${this.input.camera}`)
-      if (this.gamepadInput.movement.length() > 0.1) {
-        console.log(`🎮 Gamepad movement: x=${this.gamepadInput.movement.x.toFixed(2)}, y=${this.gamepadInput.movement.y.toFixed(2)}`)
-      }
-    }
+    // Debug: Log input state occasionally (disabled)
+    // if (Math.random() < 0.01) { // 1% chance per frame to reduce spam
+    //   console.log(`🎮 Input: forward=${this.input.forward}, backward=${this.input.backward}, left=${this.input.left}, right=${this.input.right}, run=${this.input.run}, camera=${this.input.camera}`)
+    //   if (this.gamepadInput.movement.length() > 0.1) {
+    //     console.log(`🎮 Gamepad movement: x=${this.gamepadInput.movement.x.toFixed(2)}, y=${this.gamepadInput.movement.y.toFixed(2)}`)
+    //   }
+    // }
   }
 
   // ============================================================================
@@ -391,10 +391,10 @@ export class PlayerController {
       this.state.isMoving = true
       this.state.isRunning = this.input.run
       
-      // Debug: Log speed difference
-      if (Math.random() < 0.05) { // 5% chance per frame
-        console.log(`🏃 Speed: ${this.input.run ? 'RUN' : 'WALK'} = ${speed} units/s`)
-      }
+      // Debug: Log speed difference (disabled)
+      // if (Math.random() < 0.05) { // 5% chance per frame
+      //   console.log(`🏃 Speed: ${this.input.run ? 'RUN' : 'WALK'} = ${speed} units/s`)
+      // }
       
       // logger.debug(LogModule.PLAYER, `Movement: speed=${speed}, direction=(${moveDirection.x.toFixed(2)}, ${moveDirection.z.toFixed(2)}), input=(${this.input.forward},${this.input.backward},${this.input.left},${this.input.right})`)
     } else {
@@ -445,10 +445,10 @@ export class PlayerController {
     // Check collision
     const collision = this.collisionSystem.checkCollision('player', newPosition)
     
-    // Debug: Log collision results occasionally
-    if (Math.random() < 0.01 && collision.hasCollision) { // 1% chance and only when collision happens
-      console.log(`🔍 Collision Result: hasCollision=${collision.hasCollision}, penetration=${collision.penetrationDepth.toFixed(3)}, normal=(${collision.normal.x.toFixed(2)}, ${collision.normal.y.toFixed(2)}, ${collision.normal.z.toFixed(2)})`)
-    }
+    // Debug: Log collision results occasionally (disabled)
+    // if (Math.random() < 0.01 && collision.hasCollision) { // 1% chance and only when collision happens
+    //   console.log(`🔍 Collision Result: hasCollision=${collision.hasCollision}, penetration=${collision.penetrationDepth.toFixed(3)}, normal=(${collision.normal.x.toFixed(2)}, ${collision.normal.y.toFixed(2)}, ${collision.normal.z.toFixed(2)})`)
+    // }
     
     if (collision.hasCollision) {
       // Handle collision
@@ -466,15 +466,15 @@ export class PlayerController {
         this.state.onGround = false
       }
       
-      // Debug: Log collision handling (reduced frequency)
-      if (Math.random() < 0.02) { // 2% chance per frame (was 5%)
-        console.log(`💥 Collision: corrected to (${this.state.position.x.toFixed(2)}, ${this.state.position.y.toFixed(2)}, ${this.state.position.z.toFixed(2)}), onGround=${this.state.onGround}, normal=(${collision.normal.x.toFixed(2)}, ${this.state.velocity.y.toFixed(2)}, ${this.state.velocity.z.toFixed(2)})`)
-      }
+      // Debug: Log collision handling (disabled)
+      // if (Math.random() < 0.02) { // 2% chance per frame (was 5%)
+      //   console.log(`💥 Collision: corrected to (${this.state.position.x.toFixed(2)}, ${this.state.position.y.toFixed(2)}, ${this.state.position.z.toFixed(2)}), onGround=${this.state.onGround}, normal=(${collision.normal.x.toFixed(2)}, ${this.state.velocity.y.toFixed(2)}, ${this.state.velocity.z.toFixed(2)})`)
+      // }
     } else {
       // No collision, update position
       this.state.position.copy(newPosition)
       
-      // Check if we're on ground by raycasting downwards
+      // Check if we're on ground by checking ground height at current position
       const groundHeight = this.collisionSystem.getGroundHeight(this.state.position.x, this.state.position.z)
       const playerBottomY = this.state.position.y - (this.config.height / 2 - this.config.radius)
       
@@ -486,24 +486,27 @@ export class PlayerController {
       // Only change onGround state if there's a significant difference
       const shouldBeOnGround = isNearGround && isNotMovingUp
       
-      // Add hysteresis to prevent oscillation
-      if (shouldBeOnGround && !this.state.onGround) {
-        // Only switch to onGround if we're clearly on ground
-        this.state.onGround = true
+      // CRITICAL FIX: When player walks off edge, immediately set onGround = false
+      // This allows gravity to apply and player to fall naturally
+      if (!shouldBeOnGround && this.state.onGround) {
+        // Player is no longer near ground - set onGround to false immediately
+        // This fixes the bug where player stays elevated after walking off box edge
+        this.state.onGround = false
         
-        // Debug: Log ground state changes (reduced frequency)
-        if (Math.random() < 0.02) { // 2% chance per frame (was 5%)
-          console.log(`🌊 Ground state changed: onGround=${this.state.onGround}, playerBottomY=${playerBottomY.toFixed(2)}, groundHeight=${groundHeight.toFixed(2)}, tolerance=${groundTolerance.toFixed(2)}, velocityY=${this.state.velocity.y.toFixed(2)}`)
-        }
-      } else if (!shouldBeOnGround && this.state.onGround) {
-        // Only switch to offGround if we're clearly off ground AND moving up
-        if (this.state.velocity.y > 0.1) {
-          this.state.onGround = false
+        // Debug: Log ground state changes (disabled)
+        // if (Math.random() < 0.02) { // 2% chance per frame
+        //   console.log(`🌊 Ground state changed: onGround=${this.state.onGround}, playerBottomY=${playerBottomY.toFixed(2)}, groundHeight=${groundHeight.toFixed(2)}, tolerance=${groundTolerance.toFixed(2)}, velocityY=${this.state.velocity.y.toFixed(2)}`)
+        // }
+      } else if (shouldBeOnGround && !this.state.onGround) {
+        // Only switch to onGround if we're clearly on ground AND not moving up
+        // Add velocity check to prevent setting onGround while jumping
+        if (isNotMovingUp) {
+          this.state.onGround = true
           
-          // Debug: Log ground state changes (reduced frequency)
-          if (Math.random() < 0.02) { // 2% chance per frame (was 5%)
-            console.log(`🌊 Ground state changed: onGround=${this.state.onGround}, playerBottomY=${playerBottomY.toFixed(2)}, groundHeight=${groundHeight.toFixed(2)}, tolerance=${groundTolerance.toFixed(2)}, velocityY=${this.state.velocity.y.toFixed(2)})`)
-          }
+          // Debug: Log ground state changes (disabled)
+          // if (Math.random() < 0.02) { // 2% chance per frame
+          //   console.log(`🌊 Ground state changed: onGround=${this.state.onGround}, playerBottomY=${playerBottomY.toFixed(2)}, groundHeight=${groundHeight.toFixed(2)}, tolerance=${groundTolerance.toFixed(2)}, velocityY=${this.state.velocity.y.toFixed(2)}`)
+          // }
         }
       }
     }

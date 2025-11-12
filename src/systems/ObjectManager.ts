@@ -412,43 +412,44 @@ export class ObjectManager {
   public debugObject(identifier: string): void {
     const obj = this.getObject(identifier)
     if (!obj) {
-      // console.error(`❌ Object "${identifier}" not found`)
+      console.error(`❌ Object "${identifier}" not found`)
       return
     }
     
-    // console.group(`🔍 Object Debug: ${identifier}`)
-    // console.log('📦 Object:', obj)
-    // console.log('🏷️  ID:', obj.id)
-    // console.log('🆔 UUID:', obj.uuid)
-    // console.log('🎭 Type:', obj.type)
-    // console.log('🏠 Parent System:', obj.parentSystem)
-    // console.log('📍 Position:', obj.persistentState.position)
-    // console.log('🔄 Rotation:', obj.persistentState.rotation)
-    // console.log('📏 Scale:', obj.persistentState.scale)
-    // console.log('👁️  Visible:', obj.persistentState.visible)
-    // console.log('🔒 Locked:', obj.persistentState.locked)
-    // console.log('📊 Base Y:', obj.persistentState.baseY)
-    // console.log('🎬 Animations:', obj.animations)
-    // console.log('👥 User Data:', obj.userData)
-    // console.groupEnd()
+    console.group(`🔍 Object Debug: ${identifier}`)
+    console.log('🏷️  ID:', obj.id)
+    console.log('🆔 UUID:', obj.uuid)
+    console.log('🎭 Type:', obj.type)
+    console.log('🏠 Parent System:', obj.parentSystem)
+    console.log('📍 Position:', `(${obj.persistentState.position.x.toFixed(2)}, ${obj.persistentState.position.y.toFixed(2)}, ${obj.persistentState.position.z.toFixed(2)})`)
+    console.log('🔄 Rotation:', `(${obj.persistentState.rotation.x.toFixed(2)}, ${obj.persistentState.rotation.y.toFixed(2)}, ${obj.persistentState.rotation.z.toFixed(2)})`)
+    console.log('📏 Scale:', `(${obj.persistentState.scale.x.toFixed(2)}, ${obj.persistentState.scale.y.toFixed(2)}, ${obj.persistentState.scale.z.toFixed(2)})`)
+    console.log('👁️  Visible:', obj.persistentState.visible)
+    console.log('🔒 Locked:', obj.persistentState.locked)
+    console.log('📊 Base Y:', obj.persistentState.baseY)
+    console.log('🎬 Animations:', obj.animations?.length || 0, 'animation(s)')
+    console.log('👥 User Data:', obj.userData)
+    console.groupEnd()
   }
   
   /**
    * List all managed objects
    */
   public listAllObjects(): void {
-    // console.group('📋 All Managed Objects')
-    // let index = 0
-    // this.objects.forEach((obj, key) => {
-    //   // Only list each object once (by ID)
-    //   if (key === obj.id) {
-    //     const lockStatus = obj.persistentState.locked ? '🔒' : '🔓'
-    //     const visStatus = obj.persistentState.visible ? '👁️' : '🙈'
-    //     console.log(`  ${index}: ${obj.id} (${obj.type}) ${lockStatus} ${visStatus}`)
-    //     index++
-    //   }
-    // })
-    // console.groupEnd()
+    const objects = this.getAllObjects()
+    
+    if (objects.length === 0) {
+      console.log('📋 No managed objects found')
+      return
+    }
+    
+    console.log(`📋 All Managed Objects (${objects.length} total):`)
+    objects.forEach((obj, index) => {
+      const lockStatus = obj.persistentState.locked ? '🔒' : '🔓'
+      const visStatus = obj.persistentState.visible ? '👁️' : '🙈'
+      const pos = obj.persistentState.position
+      console.log(`  ${index}: ${obj.id} (${obj.type}) ${lockStatus} ${visStatus} at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`)
+    })
   }
   
   /**
