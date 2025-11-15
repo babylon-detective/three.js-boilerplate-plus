@@ -22,6 +22,7 @@ interface AppReference {
   parameterManager?: any
   parameterGUI?: any
   parameterIntegration?: any
+  retroPostProcessing?: any
   deviceType: string
   inputMethods: string[]
 }
@@ -1111,6 +1112,15 @@ export class ConsoleCommands {
     win.testLandCollision = () => this.testLandCollision()
     win.testCollisionAtPosition = (x: number, y: number, z: number) => this.testCollisionAtPosition(x, y, z)
     win.testGroundDetection = () => this.testGroundDetection()
+    
+    // Retro Post-Processing Commands
+    win.setRetroEnabled = (enabled: boolean) => this.setRetroEnabled(enabled)
+    win.setRetroPixelSize = (size: number) => this.setRetroPixelSize(size)
+    win.setRetroColorLevels = (levels: number) => this.setRetroColorLevels(levels)
+    win.setRetroDitherAmount = (amount: number) => this.setRetroDitherAmount(amount)
+    win.setRetroResolutionScale = (scale: number) => this.setRetroResolutionScale(scale)
+    win.getRetroConfig = () => this.getRetroConfig()
+    win.applyFlatShading = () => this.applyFlatShading()
     
     // Parameter Management Commands
     win.showParameters = () => this.showParameters()

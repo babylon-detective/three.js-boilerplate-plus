@@ -20,6 +20,7 @@ import { performanceMonitor } from './systems/PerformanceMonitor'
 import { DebugGUIManager } from './systems/DebugGUIManager'
 import { HUDSystem, HUDData } from './systems/HUDSystem'
 import { InputSystem, GamepadInputHandler } from './systems/InputSystem'
+import { RetroPostProcessingSystem } from './systems/RetroPostProcessingSystem'
 import { SHADERS, ShaderPath } from './shaderImports'
 
 // TSL (Three Shader Language) - works with both WebGL and WebGPU!
@@ -758,6 +759,7 @@ class IntegratedThreeJSApp {
   private hudSystem!: HUDSystem
   private inputSystem!: InputSystem
   private gamepadHandler!: GamepadInputHandler
+  private retroPostProcessing!: RetroPostProcessingSystem
   
   // Timing for delta time calculation
   private lastTime: number = 0
@@ -875,6 +877,7 @@ class IntegratedThreeJSApp {
       animationSystem: this.animationSystem,
       configManager: this.configManager,
       collisionSystem: this.collisionSystem,
+      retroPostProcessing: this.retroPostProcessing,
       cameraManager: this.cameraManager,
       playerController: this.playerController,
       oceanLODSystem: this.oceanLODSystem,
@@ -959,19 +962,66 @@ class IntegratedThreeJSApp {
   }
 
   private initRenderer(): void {
+    // Retro mode: disable antialiasing for pixelated look
     this.renderer = new THREE.WebGLRenderer({
-      antialias: this.rendererConfig.antialias
+      antialias: false, // Disabled for retro pixelated look
+      powerPreference: 'high-performance'
     })
     
     this.renderer.setSize(window.innerWidth, window.innerHeight)
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    // Lower pixel ratio for retro look (optional - can be adjusted)
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.0)) // Reduced from 2.0
     
     if (this.rendererConfig.shadows) {
       this.renderer.shadowMap.enabled = true
-      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+      // Use basic shadow map for retro look (harder edges)
+      this.renderer.shadowMap.type = THREE.BasicShadowMap // Changed from PCFSoftShadowMap
     }
     
     this.container.appendChild(this.renderer.domElement)
+    
+    // Initialize retro post-processing system
+    this.retroPostProcessing = new RetroPostProcessingSystem(
+      this.renderer,
+      this.scene,
+      this.camera
+    )
+    
+    // Apply flat shading to all materials for retro look
+    this.applyFlatShadingToScene()
+  }
+  
+  /**
+   * Apply flat shading to all materials in the scene (for retro look)
+   */
+  private applyFlatShadingToScene(): void {
+    this.scene.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        const material = object.material
+        
+        if (material instanceof THREE.MeshStandardMaterial) {
+          material.flatShading = true
+          material.needsUpdate = true
+        } else if (material instanceof THREE.MeshLambertMaterial) {
+          material.flatShading = true
+          material.needsUpdate = true
+        } else if (material instanceof THREE.MeshPhongMaterial) {
+          material.flatShading = true
+          material.needsUpdate = true
+        } else if (material instanceof THREE.MeshPhysicalMaterial) {
+          // Convert to MeshStandardMaterial with flat shading
+          const newMaterial = new THREE.MeshStandardMaterial({
+            color: material.color,
+            metalness: material.metalness,
+            roughness: material.roughness,
+            emissive: material.emissive,
+            flatShading: true
+          })
+          object.material = newMaterial
+        }
+        // Note: MeshBasicMaterial doesn't support flatShading, skip it
+      }
+    })
   }
 
   private initControls(): void {
@@ -1418,45 +1468,48 @@ class IntegratedThreeJSApp {
   }
 
   private addLighting(): void {
-    // Ambient light for global illumination
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.3)
+    // Retro arcade-style lighting: key light + ambient fill
+    
+    // Ambient fill light (softer, lower intensity for retro look)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4) // Increased from 0.3 for better visibility
     this.scene.add(ambientLight)
 
-    // Main directional light (sun) with enhanced shadow mapping
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2)
-    directionalLight.position.set(50, 50, 25)
-    directionalLight.castShadow = this.rendererConfig.shadows
+    // Key light (main directional light - arcade style)
+    // Positioned at angle for dramatic lighting (typical arcade setup)
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.0) // Slightly reduced from 1.2
+    keyLight.position.set(30, 40, 20) // Angled key light position
+    keyLight.castShadow = this.rendererConfig.shadows
     
-    if (directionalLight.castShadow) {
-      // High-quality shadow mapping
-      directionalLight.shadow.mapSize.width = 4096
-      directionalLight.shadow.mapSize.height = 4096
-      directionalLight.shadow.camera.near = 0.5
-      directionalLight.shadow.camera.far = 500
+    if (keyLight.castShadow) {
+      // Lower resolution shadow map for retro look (harder edges)
+      keyLight.shadow.mapSize.width = 1024  // Reduced from 4096
+      keyLight.shadow.mapSize.height = 1024 // Reduced from 4096
+      keyLight.shadow.camera.near = 0.5
+      keyLight.shadow.camera.far = 500
       
-      // Large shadow camera frustum to cover the entire scene
+      // Shadow camera frustum
       const shadowCameraSize = 200
-      directionalLight.shadow.camera.left = -shadowCameraSize
-      directionalLight.shadow.camera.right = shadowCameraSize
-      directionalLight.shadow.camera.top = shadowCameraSize
-      directionalLight.shadow.camera.bottom = -shadowCameraSize
+      keyLight.shadow.camera.left = -shadowCameraSize
+      keyLight.shadow.camera.right = shadowCameraSize
+      keyLight.shadow.camera.top = shadowCameraSize
+      keyLight.shadow.camera.bottom = -shadowCameraSize
       
-      // Soft shadows with improved bias to prevent shadow acne
-      directionalLight.shadow.radius = 8
-      directionalLight.shadow.blurSamples = 25
-      directionalLight.shadow.bias = -0.0001
+      // Hard shadows for retro look (no blur)
+      keyLight.shadow.radius = 0 // No blur for hard edges
+      keyLight.shadow.bias = -0.0001
     }
     
-    directionalLight.target.position.set(0, 0, 0)
-    this.scene.add(directionalLight)
-    this.scene.add(directionalLight.target)
+    keyLight.target.position.set(0, 0, 0)
+    this.scene.add(keyLight)
+    this.scene.add(keyLight.target)
 
-    // Softer fill light for better visibility
-    const fillLight = new THREE.DirectionalLight(0x8899ff, 0.2)
-    fillLight.position.set(-25, 25, -25)
+    // Subtle fill light from opposite side (arcade style)
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.25) // Slightly increased from 0.2
+    fillLight.position.set(-20, 20, -15)
+    fillLight.castShadow = false // Fill light doesn't cast shadows
     this.scene.add(fillLight)
     
-    // console.log('💡 Lighting system initialized')
+    // console.log('💡 Retro arcade-style lighting initialized')
   }
 
   private createSkySystem(): void {
@@ -1696,6 +1749,11 @@ class IntegratedThreeJSApp {
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(window.innerWidth, window.innerHeight)
     
+    // Update retro post-processing on resize
+    if (this.retroPostProcessing) {
+      this.retroPostProcessing.handleResize()
+    }
+    
     const newDeviceType = this.detectDeviceType()
     if (newDeviceType !== this.deviceType) {
       this.deviceType = newDeviceType
@@ -1905,7 +1963,14 @@ class IntegratedThreeJSApp {
       
       // Render with current camera from camera manager
       const currentCamera = this.cameraManager.getCurrentCamera()
-      this.renderer.render(this.scene, currentCamera)
+      
+      // Render with retro post-processing
+      if (this.retroPostProcessing) {
+        this.retroPostProcessing.render(currentCamera)
+      } else {
+        // Fallback to normal render
+        this.renderer.render(this.scene, currentCamera)
+      }
       
       // End render timing and performance monitoring
       performanceMonitor.endRender()

@@ -72,6 +72,11 @@ export class PlayerController {
   // Collision
   private collisionVolume!: CollisionVolume
   
+  // Ground detection hysteresis to prevent flickering
+  private groundStateBuffer: boolean = false
+  private groundStateFrames: number = 0
+  private readonly groundStateThreshold: number = 3 // Require 3 frames of consistent state before changing
+  
   // Input handling
   private keyStates: Map<string, boolean> = new Map()
   private boundKeyDown: (event: KeyboardEvent) => void
@@ -455,15 +460,26 @@ export class PlayerController {
       this.state.position.copy(collision.correctedPosition)
       
       // If collision is with ground (normal points mostly upward)
-      if (collision.normal.y > 0.5) {
-        this.state.onGround = true
-        // Reset vertical velocity if moving downwards into ground
-        if (this.state.velocity.y < 0) {
-          this.state.velocity.y = 0
-        }
+      // Use hysteresis to prevent rapid toggling
+      const shouldBeOnGround = collision.normal.y > 0.5
+      
+      if (shouldBeOnGround !== this.groundStateBuffer) {
+        this.groundStateBuffer = shouldBeOnGround
+        this.groundStateFrames = 0
       } else {
-        // Collision with wall or ceiling, not ground
-        this.state.onGround = false
+        this.groundStateFrames++
+        if (this.groundStateFrames >= this.groundStateThreshold) {
+          if (shouldBeOnGround) {
+            this.state.onGround = true
+            // Reset vertical velocity if moving downwards into ground
+            if (this.state.velocity.y < 0) {
+              this.state.velocity.y = 0
+            }
+          } else {
+            // Collision with wall or ceiling, not ground
+            this.state.onGround = false
+          }
+        }
       }
       
       // Debug: Log collision handling (disabled)
@@ -486,27 +502,29 @@ export class PlayerController {
       // Only change onGround state if there's a significant difference
       const shouldBeOnGround = isNearGround && isNotMovingUp
       
-      // CRITICAL FIX: When player walks off edge, immediately set onGround = false
-      // This allows gravity to apply and player to fall naturally
-      if (!shouldBeOnGround && this.state.onGround) {
-        // Player is no longer near ground - set onGround to false immediately
-        // This fixes the bug where player stays elevated after walking off box edge
-        this.state.onGround = false
+      // HYSTERESIS FIX: Use buffered ground state to prevent rapid toggling/flickering
+      if (shouldBeOnGround !== this.groundStateBuffer) {
+        // State changed, reset counter
+        this.groundStateBuffer = shouldBeOnGround
+        this.groundStateFrames = 0
+      } else {
+        // State is consistent, increment counter
+        this.groundStateFrames++
         
-        // Debug: Log ground state changes (disabled)
-        // if (Math.random() < 0.02) { // 2% chance per frame
-        //   console.log(`🌊 Ground state changed: onGround=${this.state.onGround}, playerBottomY=${playerBottomY.toFixed(2)}, groundHeight=${groundHeight.toFixed(2)}, tolerance=${groundTolerance.toFixed(2)}, velocityY=${this.state.velocity.y.toFixed(2)}`)
-        // }
-      } else if (shouldBeOnGround && !this.state.onGround) {
-        // Only switch to onGround if we're clearly on ground AND not moving up
-        // Add velocity check to prevent setting onGround while jumping
-        if (isNotMovingUp) {
-          this.state.onGround = true
-          
-          // Debug: Log ground state changes (disabled)
-          // if (Math.random() < 0.02) { // 2% chance per frame
-          //   console.log(`🌊 Ground state changed: onGround=${this.state.onGround}, playerBottomY=${playerBottomY.toFixed(2)}, groundHeight=${groundHeight.toFixed(2)}, tolerance=${groundTolerance.toFixed(2)}, velocityY=${this.state.velocity.y.toFixed(2)}`)
-          // }
+        // Only update actual onGround state after threshold frames of consistency
+        if (this.groundStateFrames >= this.groundStateThreshold) {
+          // CRITICAL FIX: When player walks off edge, immediately set onGround = false
+          // This allows gravity to apply and player to fall naturally
+          if (!shouldBeOnGround && this.state.onGround) {
+            // Player is no longer near ground - set onGround to false
+            this.state.onGround = false
+          } else if (shouldBeOnGround && !this.state.onGround) {
+            // Only switch to onGround if we're clearly on ground AND not moving up
+            // Add velocity check to prevent setting onGround while jumping
+            if (isNotMovingUp) {
+              this.state.onGround = true
+            }
+          }
         }
       }
     }

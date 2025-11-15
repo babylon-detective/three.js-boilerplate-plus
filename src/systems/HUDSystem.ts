@@ -62,6 +62,10 @@ export class HUDSystem {
   private data: Partial<HUDData> = {}
   private updateCallbacks: Map<string, () => void> = new Map()
   
+  // Smoothing for velocity values to prevent flickering
+  private smoothedVelocity: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 }
+  private readonly velocitySmoothingFactor: number = 0.3 // Lower = more smoothing (0.0 to 1.0)
+  
   // DOM elements
   private elements: {
     playerInfo?: HTMLElement
@@ -359,8 +363,13 @@ export class HUDSystem {
     }
     
     if (this.data.velocity) {
+      // Smooth velocity values to prevent flickering
+      this.smoothedVelocity.x += (this.data.velocity.x - this.smoothedVelocity.x) * this.velocitySmoothingFactor
+      this.smoothedVelocity.y += (this.data.velocity.y - this.smoothedVelocity.y) * this.velocitySmoothingFactor
+      this.smoothedVelocity.z += (this.data.velocity.z - this.smoothedVelocity.z) * this.velocitySmoothingFactor
+      
       this.updateElement('velocity', 
-        `${this.data.velocity.x.toFixed(1)}, ${this.data.velocity.y.toFixed(1)}, ${this.data.velocity.z.toFixed(1)}`)
+        `${this.smoothedVelocity.x.toFixed(1)}, ${this.smoothedVelocity.y.toFixed(1)}, ${this.smoothedVelocity.z.toFixed(1)}`)
     }
     
     if (this.data.onGround !== undefined) {
