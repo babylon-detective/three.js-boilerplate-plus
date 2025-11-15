@@ -41,6 +41,7 @@ export class CollisionSystem {
   private raycaster: THREE.Raycaster = new THREE.Raycaster()
   private tempVector: THREE.Vector3 = new THREE.Vector3()
   private tempVector2: THREE.Vector3 = new THREE.Vector3()
+  private tempQuaternion: THREE.Quaternion = new THREE.Quaternion()
   private tempBox: THREE.Box3 = new THREE.Box3()
 
   // Performance optimizations
@@ -52,6 +53,15 @@ export class CollisionSystem {
   private playerPosition: THREE.Vector3 = new THREE.Vector3()
   private lastPlayerPosition: THREE.Vector3 = new THREE.Vector3()
   private positionThreshold: number = 0.1 // Only update if player moved more than 0.1 units
+  
+  // ============================================================================
+  // COLLISION HEIGHT OFFSET - ADJUST THIS TO MATCH LAND MESH SURFACE
+  // ============================================================================
+  // Increase this value to raise collision detection higher (positive = up)
+  // Decrease this value to lower collision detection (negative = down)
+  // Working value: 0.9 (adjusts collision to match flat land mesh surface)
+  // You can also adjust at runtime using: collisionSystem.setGroundHeightOffset(value)
+  private groundHeightOffset: number = 0.9
 
   constructor() {
     logger.info(LogModule.COLLISION, 'CollisionSystem initialized with performance optimizations')
@@ -441,7 +451,9 @@ export class CollisionSystem {
   // ============================================================================
 
   /**
-   * Get ground height using primitive bounding boxes (for imported models)
+   * Get ground height using raycasting for exact mesh surface detection
+   * CRITICAL: Only uses top surface intersections (highest Y value)
+   * Uses mesh world matrix to ensure correct coordinate transformation
    */
   private getGroundHeightOptimized(x: number, z: number): number {
     if (this.landMeshes.length === 0) {
@@ -451,20 +463,92 @@ export class CollisionSystem {
 
     let maxGroundHeight = -2.0 // Start with ocean surface level
     
-    // Check each land mesh to see if point is within its bounds
+    // Use raycasting to get exact surface height at this point
+    const allMeshes = this.landMeshes.map(info => info.mesh)
+    
+    // Find the highest bounding box to start raycast from
+    let highestY = -2.0
     for (const info of this.landMeshes) {
       const boundingBox = info.boundingBox
-      
-      // Check if point is within this mesh's X-Z bounds
       if (x >= boundingBox.min.x && x <= boundingBox.max.x &&
           z >= boundingBox.min.z && z <= boundingBox.max.z) {
-        
-        // Use top of bounding box for all meshes (primitive collision)
-        maxGroundHeight = Math.max(maxGroundHeight, boundingBox.max.y)
+        highestY = Math.max(highestY, boundingBox.max.y)
       }
     }
     
-    return maxGroundHeight
+    // If we found a mesh in bounds, raycast down to get exact surface
+    if (highestY > -2.0) {
+      // Ensure all meshes have updated world matrices before raycasting
+      for (const mesh of allMeshes) {
+        mesh.updateMatrixWorld(true)
+      }
+      
+      // Cast from well above the mesh to ensure we hit the top surface
+      // Use a very high starting point to ensure we're above all geometry
+      const rayStartY = Math.max(highestY + 200, 500) // Start very high
+      this.tempVector.set(x, rayStartY, z)
+      this.tempVector2.set(0, -1, 0) // Cast straight down
+      
+      this.raycaster.set(this.tempVector, this.tempVector2)
+      // Use recursive intersection to account for all transforms
+      const intersects = this.raycaster.intersectObjects(allMeshes, true)
+      
+      if (intersects.length > 0) {
+        // CRITICAL FIX: Find the intersection with the HIGHEST Y value (top surface)
+        // This ensures we get the top of the mesh, not the bottom
+        // Also filter to only use intersections with upward-facing normals (top surface)
+        let topIntersection: THREE.Intersection | null = null
+        let highestY = -Infinity
+        
+        for (const intersect of intersects) {
+          const worldY = intersect.point.y
+          
+          // Check if this is a top surface (normal pointing up)
+          let isTopSurface = true
+          if (intersect.face) {
+            // Get world-space normal
+            const worldNormal = new THREE.Vector3()
+            worldNormal.copy(intersect.face.normal)
+            if (intersect.object instanceof THREE.Mesh) {
+              intersect.object.getWorldQuaternion(this.tempQuaternion)
+              worldNormal.applyQuaternion(this.tempQuaternion)
+            }
+            // Check if normal is pointing upward (Y component > 0.5 means mostly upward)
+            isTopSurface = worldNormal.y > 0.5
+          }
+          
+          // Only consider top surfaces, and take the highest one
+          if (isTopSurface && worldY > highestY) {
+            highestY = worldY
+            topIntersection = intersect
+          }
+        }
+        
+        // If we found a top surface, use it; otherwise fall back to highest Y
+        if (topIntersection) {
+          maxGroundHeight = topIntersection.point.y
+        } else {
+          // Fallback: use highest Y from all intersections
+          for (const intersect of intersects) {
+            if (intersect.point.y > maxGroundHeight) {
+              maxGroundHeight = intersect.point.y
+            }
+          }
+        }
+      } else {
+        // Fallback to bounding box if raycast fails
+        for (const info of this.landMeshes) {
+          const boundingBox = info.boundingBox
+          if (x >= boundingBox.min.x && x <= boundingBox.max.x &&
+              z >= boundingBox.min.z && z <= boundingBox.max.z) {
+            maxGroundHeight = Math.max(maxGroundHeight, boundingBox.max.y)
+          }
+        }
+      }
+    }
+    
+    // Apply vertical offset to match land mesh surface
+    return maxGroundHeight + this.groundHeightOffset
   }
 
   /**
@@ -608,6 +692,22 @@ export class CollisionSystem {
   }
 
   /**
+   * Set ground height offset to adjust collision detection height
+   * @param offset Positive values raise collision, negative values lower it
+   */
+  public setGroundHeightOffset(offset: number): void {
+    this.groundHeightOffset = offset
+    logger.info(LogModule.COLLISION, `Ground height offset set to ${offset.toFixed(2)}`)
+  }
+
+  /**
+   * Get current ground height offset
+   */
+  public getGroundHeightOffset(): number {
+    return this.groundHeightOffset
+  }
+
+  /**
    * Get performance statistics
    */
   public getPerformanceStats(): object {
@@ -617,7 +717,8 @@ export class CollisionSystem {
       cacheSize: this.groundHeightCache.size,
       cacheTimeout: this.cacheTimeout,
       collisionCheckInterval: this.collisionCheckInterval,
-      maxRaycastDistance: this.maxRaycastDistance
+      maxRaycastDistance: this.maxRaycastDistance,
+      groundHeightOffset: this.groundHeightOffset
     }
   }
 
@@ -759,6 +860,28 @@ export class CollisionSystem {
     const groundHeight = this.getGroundHeightOptimized(x, z)
     console.log(`  Final Ground Height: ${groundHeight.toFixed(2)}`)
     
+    // Test raycast directly
+    const allMeshes = this.landMeshes.map(info => info.mesh)
+    this.tempVector.set(x, 500, z)
+    this.tempVector2.set(0, -1, 0)
+    this.raycaster.set(this.tempVector, this.tempVector2)
+    const intersects = this.raycaster.intersectObjects(allMeshes, true)
+    console.log(`  Raycast intersections: ${intersects.length}`)
+    if (intersects.length > 0) {
+      intersects.forEach((intersect, i) => {
+        console.log(`    Intersection ${i}: Y=${intersect.point.y.toFixed(2)}, distance=${intersect.distance.toFixed(2)}, object=${intersect.object.userData.id || 'unnamed'}`)
+        if (intersect.face) {
+          const worldNormal = new THREE.Vector3()
+          worldNormal.copy(intersect.face.normal)
+          if (intersect.object instanceof THREE.Mesh) {
+            intersect.object.getWorldQuaternion(this.tempQuaternion)
+            worldNormal.applyQuaternion(this.tempQuaternion)
+          }
+          console.log(`      Normal: (${worldNormal.x.toFixed(2)}, ${worldNormal.y.toFixed(2)}, ${worldNormal.z.toFixed(2)})`)
+        }
+      })
+    }
+    
     // Show breakdown for each land mesh
     this.landMeshes.forEach((info, index) => {
       const mesh = info.mesh
@@ -766,7 +889,10 @@ export class CollisionSystem {
       
       if (x >= boundingBox.min.x && x <= boundingBox.max.x &&
           z >= boundingBox.min.z && z <= boundingBox.max.z) {
-        console.log(`  ${mesh.userData.id || 'unnamed'}: bbox height = ${boundingBox.max.y.toFixed(2)}`)
+        console.log(`  ${mesh.userData.id || 'unnamed'}: bbox min.y=${boundingBox.min.y.toFixed(2)}, max.y=${boundingBox.max.y.toFixed(2)}`)
+        console.log(`    Mesh position: (${mesh.position.x.toFixed(2)}, ${mesh.position.y.toFixed(2)}, ${mesh.position.z.toFixed(2)})`)
+        console.log(`    Mesh rotation: (${mesh.rotation.x.toFixed(2)}, ${mesh.rotation.y.toFixed(2)}, ${mesh.rotation.z.toFixed(2)})`)
+        console.log(`    Mesh scale: (${mesh.scale.x.toFixed(2)}, ${mesh.scale.y.toFixed(2)}, ${mesh.scale.z.toFixed(2)})`)
       }
     })
   }

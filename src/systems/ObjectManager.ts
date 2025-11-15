@@ -178,7 +178,7 @@ export class ObjectManager {
   /**
    * Update object position and persist if enabled
    */
-  public setObjectPosition(identifier: string, position: THREE.Vector3, persist: boolean = true, forceMove: boolean = false): boolean {
+  public setObjectPosition(identifier: string, position: THREE.Vector3, persist: boolean = true, forceMove: boolean = false, animationSystem?: any): boolean {
     const obj = this.getObject(identifier)
     if (!obj) return false
     
@@ -186,6 +186,22 @@ export class ObjectManager {
     if (obj.persistentState.locked && !forceMove) {
       // console.warn(`🔒 Object ${identifier} position is locked`)
       return false
+    }
+    
+    // CRITICAL FIX: Stop animations for this object to prevent stretching/distortion
+    // This fixes issues with animated-1, animated-2, animated-3, and hologram
+    if (animationSystem && obj.animations && obj.animations.length > 0) {
+      animationSystem.removeAnimationsForObject(obj.mesh)
+      // Reset scale to (1,1,1) if object had scale animations to prevent stretching
+      // obj.animations is an array of animation type strings like ['scale', 'combined', etc.]
+      const hasScaleAnimation = obj.animations.some(animType => animType === 'scale' || animType === 'combined')
+      if (hasScaleAnimation) {
+        obj.mesh.scale.set(1, 1, 1)
+        obj.persistentState.scale.set(1, 1, 1)
+        if (obj.shadowMesh) {
+          obj.shadowMesh.scale.set(1, 1, 1)
+        }
+      }
     }
     
     // Update mesh position
@@ -209,6 +225,37 @@ export class ObjectManager {
     }
     
     // console.log(`📍 Updated position for ${identifier}: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`)
+    return true
+  }
+  
+  /**
+   * Set object rotation
+   */
+  public setObjectRotation(identifier: string, rotation: THREE.Euler, persist: boolean = true, forceMove: boolean = false): boolean {
+    const obj = this.getObject(identifier)
+    if (!obj) return false
+    
+    // Check if position is locked (unless forcing move)
+    if (obj.persistentState.locked && !forceMove) {
+      // console.warn(`🔒 Object ${identifier} rotation is locked`)
+      return false
+    }
+    
+    // Update mesh rotation
+    obj.mesh.rotation.copy(rotation)
+    obj.persistentState.rotation.copy(rotation)
+    
+    // Update shadow mesh if exists
+    if (obj.shadowMesh) {
+      obj.shadowMesh.rotation.copy(rotation)
+    }
+    
+    // Persist to storage if enabled
+    if (persist) {
+      this.savePersistentStates()
+    }
+    
+    // console.log(`🔄 Updated rotation for ${identifier}: (${rotation.x.toFixed(2)}, ${rotation.y.toFixed(2)}, ${rotation.z.toFixed(2)})`)
     return true
   }
   

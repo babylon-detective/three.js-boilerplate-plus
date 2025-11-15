@@ -62,13 +62,45 @@ export class ConsoleCommands {
 
   public lockObject(id: string): boolean {
     const result = this.app.objectManager.lockObject(id)
-    console.log(`🔒 Object "${id}" ${result ? 'locked' : 'lock failed'}`)
+    if (result) {
+      console.log(`🔒 Object "${id}" locked`)
+    } else {
+      console.log(`🔒 Object "${id}" lock failed`)
+      // Check if object exists
+      const obj = this.app.objectManager.getObject(id)
+      if (!obj) {
+        // List available objects to help user
+        const allObjects = this.app.objectManager.getAllObjects()
+        const objectIds = allObjects.map(o => o.id).filter(Boolean)
+        if (objectIds.length > 0) {
+          console.log(`💡 Available objects: ${objectIds.join(', ')}`)
+        } else {
+          console.log(`💡 No objects found. Object "${id}" does not exist.`)
+        }
+      }
+    }
     return result
   }
 
   public unlockObject(id: string): boolean {
     const result = this.app.objectManager.lockObject(id, false)
-    console.log(`🔓 Object "${id}" ${result ? 'unlocked' : 'unlock failed'}`)
+    if (result) {
+      console.log(`🔓 Object "${id}" unlocked`)
+    } else {
+      console.log(`🔓 Object "${id}" unlock failed`)
+      // Check if object exists
+      const obj = this.app.objectManager.getObject(id)
+      if (!obj) {
+        // List available objects to help user
+        const allObjects = this.app.objectManager.getAllObjects()
+        const objectIds = allObjects.map(o => o.id).filter(Boolean)
+        if (objectIds.length > 0) {
+          console.log(`💡 Available objects: ${objectIds.join(', ')}`)
+        } else {
+          console.log(`💡 No objects found. Object "${id}" does not exist.`)
+        }
+      }
+    }
     return result
   }
 
@@ -123,7 +155,8 @@ export class ConsoleCommands {
     }
     
     // Move the object first (don't save yet if we're going to auto-lock)
-    const result = this.app.objectManager.setObjectPosition(id, new THREE.Vector3(x, y, z), !shouldAutoLock, shouldAutoLock)
+    // Pass animationSystem to stop animations and prevent stretching
+    const result = this.app.objectManager.setObjectPosition(id, new THREE.Vector3(x, y, z), !shouldAutoLock, shouldAutoLock, this.app.animationSystem)
     
     // Lock after successful move if needed (this will save everything at once)
     if (shouldAutoLock && result) {
@@ -139,7 +172,48 @@ export class ConsoleCommands {
     return result
   }
 
-  // Scale and rotation methods can be added to ObjectManager later if needed
+  /**
+   * Rotate object by Euler angles (in radians)
+   * @param id Object identifier
+   * @param x Rotation around X axis (in radians)
+   * @param y Rotation around Y axis (in radians)
+   * @param z Rotation around Z axis (in radians)
+   * @param autoLock Whether to auto-lock animated objects
+   */
+  public rotateObject(id: string, x: number, y: number, z: number, autoLock: boolean = true): boolean {
+    let shouldAutoLock = false
+    
+    // For animated objects, automatically lock them to prevent animation override
+    if (autoLock) {
+      const obj = this.app.objectManager.getObject(id)
+      if (obj && obj.animations && obj.animations.length > 0) {
+        console.log(`🔒 Auto-locking animated object "${id}" to prevent animation override`)
+        shouldAutoLock = true
+      }
+    }
+    
+    const result = this.app.objectManager.setObjectRotation(
+      id,
+      new THREE.Euler(x, y, z),
+      true,
+      false
+    )
+    
+    if (result && shouldAutoLock) {
+      this.app.objectManager.lockObject(id, true)
+    }
+    
+    if (result) {
+      const degX = (x * 180 / Math.PI).toFixed(1)
+      const degY = (y * 180 / Math.PI).toFixed(1)
+      const degZ = (z * 180 / Math.PI).toFixed(1)
+      console.log(`🔄 Rotated object "${id}" to (${degX}°, ${degY}°, ${degZ}°)`)
+    } else {
+      console.log(`❌ Failed to rotate object "${id}"`)
+    }
+    
+    return result
+  }
 
   public clearObjectStates(): void {
     this.app.objectManager.clearPersistentStates()
@@ -813,6 +887,7 @@ export class ConsoleCommands {
 - lockObjects(id1, id2, ...)       - Lock multiple objects at once
 - unlockObjects(id1, id2, ...)     - Unlock multiple objects at once
 - moveObject(id, x, y, z)          - Move object to position
+- rotateObject(id, x, y, z)        - Rotate object (angles in radians)
 - clearObjectStates()              - Clear all object states
 - lookAtObject(id)                 - Point camera at object
 
@@ -975,8 +1050,8 @@ export class ConsoleCommands {
     win.lockObjects = (...ids: string[]) => this.lockObjects(...ids)
     win.unlockObjects = (...ids: string[]) => this.unlockObjects(...ids)
     win.moveObject = (id: string, x: number, y: number, z: number) => this.moveObject(id, x, y, z)
+    win.rotateObject = (id: string, x: number, y: number, z: number) => this.rotateObject(id, x, y, z)
     win.lookAtObject = (id: string) => this.lookAtObject(id)
-    // Scale and rotation methods can be added later
     win.clearObjectStates = () => this.clearObjectStates()
     
     // Camera Management Commands (Legacy System)

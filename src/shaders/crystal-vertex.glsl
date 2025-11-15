@@ -8,34 +8,38 @@ varying float vRandom;
 varying float vCrystal;
 
 void main() {
-    vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+    // Use local position for displacement calculations (prevents stretching when object moves)
+    vec3 localPos = position;
     
     // Create faceted crystal effect
     float facetFreq = 8.0;
-    float angle = atan(modelPosition.z, modelPosition.x);
+    float angle = atan(localPos.z, localPos.x);
     float facetAngle = floor(angle * facetFreq / (2.0 * 3.14159)) * (2.0 * 3.14159) / facetFreq;
     
     // Apply faceting
-    float radius = length(modelPosition.xz);
-    modelPosition.x = cos(facetAngle) * radius;
-    modelPosition.z = sin(facetAngle) * radius;
+    float radius = length(localPos.xz);
+    localPos.x = cos(facetAngle) * radius;
+    localPos.z = sin(facetAngle) * radius;
     
     // Add crystal growth animation
     float growth = sin(uTime * 1.5 + aRandom * 6.28) * 0.5 + 0.5;
-    float heightFactor = (modelPosition.y + 0.5) / 1.0;
+    float heightFactor = (localPos.y + 0.5) / 1.0;
     
-    // Apply growth effect - stronger at edges
+    // Apply growth effect - stronger at edges (restored original intensity)
     float edgeDistance = abs(radius - 0.3);
-    float growthAmount = growth * uAmplitude * (1.0 + edgeDistance * 2.0);
+    float growthAmount = growth * uAmplitude * (1.0 + edgeDistance * 3.0); // Increased from 2.0
     
-    // Push vertices outward for crystal spikes
-    vec3 direction = normalize(vec3(modelPosition.x, 0.0, modelPosition.z));
-    modelPosition.xyz += direction * growthAmount * heightFactor;
+    // Push vertices outward for crystal spikes (restored original intensity)
+    vec3 direction = normalize(vec3(localPos.x, 0.0, localPos.z));
+    localPos.xyz += direction * growthAmount * heightFactor * 1.5; // Increased multiplier
     
-    // Add vertical crystal segments
-    float segments = sin(modelPosition.y * 10.0 + uTime * 0.5) * 0.1 + 1.0;
-    modelPosition.x *= segments;
-    modelPosition.z *= segments;
+    // Add vertical crystal segments (restored original intensity)
+    float segments = sin(localPos.y * 10.0 + uTime * 0.5) * 0.2 + 0.8; // Increased variation
+    localPos.x *= segments;
+    localPos.z *= segments;
+    
+    // Transform to world space only at the end
+    vec4 modelPosition = modelMatrix * vec4(localPos, 1.0);
     
     // Store crystal value for fragment shader
     vCrystal = growth;

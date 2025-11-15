@@ -41,7 +41,7 @@ type PartialAnimation<T> = {
 
 // Generic animation class with TypeScript constraints
 class Animation<T extends THREE.Object3D = THREE.Object3D> {
-  private target: T
+  public readonly target: T
   private startValues: PartialAnimation<AnimatableProperties> = {}
   private endValues: PartialAnimation<AnimatableProperties> = {}
   private currentValues: PartialAnimation<AnimatableProperties> = {}
@@ -293,6 +293,23 @@ export class AnimationSystem {
 
   public removeAnimation(animation: Animation): void {
     this.animations.delete(animation)
+  }
+
+  /**
+   * Remove all animations for a specific object
+   */
+  public removeAnimationsForObject(target: THREE.Object3D): void {
+    const animationsToRemove: Animation[] = []
+    for (const animation of this.animations) {
+      // Check if animation targets this object
+      if (animation.target === target) {
+        animationsToRemove.push(animation)
+      }
+    }
+    animationsToRemove.forEach(animation => {
+      animation.stop()
+      this.animations.delete(animation)
+    })
   }
 
   public update(currentTime: number): void {

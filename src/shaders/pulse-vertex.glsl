@@ -8,25 +8,29 @@ varying float vRandom;
 varying float vPulse;
 
 void main() {
-    vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+    // Use local position for displacement calculations (prevents stretching when object moves)
+    vec3 localPos = position;
     
     // Create pulsing effect based on height
-    float heightFactor = (modelPosition.y + 0.5) / 1.0; // Normalize height
+    float heightFactor = (localPos.y + 0.5) / 1.0; // Normalize height
     float pulse = sin(uTime * 3.0) * 0.5 + 0.5;
     
-    // Stronger pulse at the top, weaker at bottom
-    float scaleFactor = 1.0 + pulse * uAmplitude * heightFactor;
+    // Stronger pulse at the top, weaker at bottom (restored original intensity)
+    float scaleFactor = 1.0 + pulse * uAmplitude * heightFactor * 1.5; // Increased multiplier
     
     // Apply pulse to x and z coordinates
-    modelPosition.x *= scaleFactor;
-    modelPosition.z *= scaleFactor;
+    localPos.x *= scaleFactor;
+    localPos.z *= scaleFactor;
     
-    // Add vertical breathing
-    modelPosition.y += sin(uTime * 2.0 + aRandom * 6.28) * uAmplitude * 0.3;
+    // Add vertical breathing (restored original intensity)
+    localPos.y += sin(uTime * 2.0 + aRandom * 6.28) * uAmplitude * 0.5; // Increased from 0.3
     
-    // Add secondary pulse for complexity
-    float secondaryPulse = sin(uTime * 5.0 + heightFactor * 3.14) * 0.2 + 0.8;
-    modelPosition.xyz *= secondaryPulse;
+    // Add secondary pulse for complexity (restored original intensity)
+    float secondaryPulse = sin(uTime * 5.0 + heightFactor * 3.14) * 0.3 + 0.7; // Increased variation
+    localPos.xyz *= secondaryPulse;
+    
+    // Transform to world space only at the end
+    vec4 modelPosition = modelMatrix * vec4(localPos, 1.0);
     
     // Store pulse value for fragment shader
     vPulse = pulse;
