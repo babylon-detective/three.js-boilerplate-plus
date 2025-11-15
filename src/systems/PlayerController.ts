@@ -82,6 +82,27 @@ export class PlayerController {
   private boundKeyDown: (event: KeyboardEvent) => void
   private boundKeyUp: (event: KeyboardEvent) => void
   
+  // Touch input handling
+  private touchState: {
+    activeTouches: Map<number, { x: number, y: number, startX: number, startY: number }>
+    movementTouch: number | null // ID of touch used for movement (one finger)
+    lookTouch: number | null // ID of touch used for looking (two fingers)
+    lastMovementDelta: THREE.Vector2
+    lastLookDelta: THREE.Vector2
+    movementDirection: THREE.Vector2 // Continuous movement direction from touch position
+  } = {
+    activeTouches: new Map(),
+    movementTouch: null,
+    lookTouch: null,
+    lastMovementDelta: new THREE.Vector2(),
+    lastLookDelta: new THREE.Vector2(),
+    movementDirection: new THREE.Vector2() // For continuous movement based on touch position
+  }
+  private boundTouchStart: (event: TouchEvent) => void
+  private boundTouchMove: (event: TouchEvent) => void
+  private boundTouchEnd: (event: TouchEvent) => void
+  private boundTouchCancel: (event: TouchEvent) => void
+  
   // Gamepad input
   private gamepadInput: {
     movement: THREE.Vector2
@@ -148,6 +169,10 @@ export class PlayerController {
     // Bind input handlers
     this.boundKeyDown = this.handleKeyDown.bind(this)
     this.boundKeyUp = this.handleKeyUp.bind(this)
+    this.boundTouchStart = this.handleTouchStart.bind(this)
+    this.boundTouchMove = this.handleTouchMove.bind(this)
+    this.boundTouchEnd = this.handleTouchEnd.bind(this)
+    this.boundTouchCancel = this.handleTouchCancel.bind(this)
     
     // Initialize player
     this.initializePlayer()
@@ -220,8 +245,16 @@ export class PlayerController {
   }
 
   private setupInputHandlers(): void {
+    // Keyboard input
     document.addEventListener('keydown', this.boundKeyDown)
     document.addEventListener('keyup', this.boundKeyUp)
+    
+    // Touch input for mobile
+    const canvas = this.scene.parent?.userData?.canvas || document.body
+    canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false })
+    canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false })
+    canvas.addEventListener('touchend', this.boundTouchEnd, { passive: false })
+    canvas.addEventListener('touchcancel', this.boundTouchCancel, { passive: false })
   }
 
   // ============================================================================
@@ -257,32 +290,176 @@ export class PlayerController {
     const keyRun = (this.keyStates.get('ShiftLeft') || this.keyStates.get('ShiftRight')) || false
     const keyCamera = this.keyStates.get('KeyC') || false
     
+    // Touch input for movement (one finger) - use continuous direction
+    const touchMovement = this.touchState.movementDirection
+    const touchForward = touchMovement.y > 0.1 // Forward movement
+    const touchBackward = touchMovement.y < -0.1 // Backward movement
+    const touchLeft = touchMovement.x < -0.1 // Left movement
+    const touchRight = touchMovement.x > 0.1 // Right movement
+    
     // Gamepad input (analog movement converted to digital)
     const gamepadForward = this.gamepadInput.movement.y > 0.1
     const gamepadBackward = this.gamepadInput.movement.y < -0.1
     const gamepadLeft = this.gamepadInput.movement.x < -0.1
     const gamepadRight = this.gamepadInput.movement.x > 0.1
     
-    // Combine keyboard and gamepad input (OR logic - either input works)
-    this.input.forward = keyForward || gamepadForward
-    this.input.backward = keyBackward || gamepadBackward
-    this.input.left = keyLeft || gamepadLeft
-    this.input.right = keyRight || gamepadRight
+    // Combine keyboard, touch, and gamepad input (OR logic - any input works)
+    this.input.forward = keyForward || touchForward || gamepadForward
+    this.input.backward = keyBackward || touchBackward || gamepadBackward
+    this.input.left = keyLeft || touchLeft || gamepadLeft
+    this.input.right = keyRight || touchRight || gamepadRight
     this.input.jump = keyJump || this.gamepadInput.jump
     this.input.run = keyRun || this.gamepadInput.run
     this.input.camera = keyCamera || this.gamepadInput.cameraMode
     
-    // Store analog values for smooth movement
-    this.input.analogMovement = this.gamepadInput.movement.clone()
-    this.input.analogCamera = this.gamepadInput.camera.clone()
+    // Store analog values for smooth movement (prioritize gamepad, then touch)
+    if (this.gamepadInput.movement.length() > 0.1) {
+      this.input.analogMovement = this.gamepadInput.movement.clone()
+    } else if (this.touchState.movementDirection.length() > 0.1) {
+      // Use continuous touch direction for smooth analog movement
+      this.input.analogMovement = this.touchState.movementDirection.clone()
+    } else {
+      this.input.analogMovement = new THREE.Vector2()
+    }
     
-    // Debug: Log input state occasionally (disabled)
-    // if (Math.random() < 0.01) { // 1% chance per frame to reduce spam
-    //   console.log(`🎮 Input: forward=${this.input.forward}, backward=${this.input.backward}, left=${this.input.left}, right=${this.input.right}, run=${this.input.run}, camera=${this.input.camera}`)
-    //   if (this.gamepadInput.movement.length() > 0.1) {
-    //     console.log(`🎮 Gamepad movement: x=${this.gamepadInput.movement.x.toFixed(2)}, y=${this.gamepadInput.movement.y.toFixed(2)}`)
-    //   }
-    // }
+    // Touch camera input (two fingers for looking)
+    if (this.touchState.lastLookDelta.length() > 0.1) {
+      // Convert touch delta to camera rotation
+      // Use higher sensitivity for touch since deltas are pixel-based
+      const lookSensitivity = 0.003 // Increased for better touch responsiveness
+      this.input.analogCamera = this.touchState.lastLookDelta.clone().multiplyScalar(lookSensitivity)
+    } else {
+      this.input.analogCamera = this.gamepadInput.camera.clone()
+    }
+    
+    // Reset touch deltas after processing (they'll be updated on next touch move)
+    // Note: We don't reset here to allow continuous movement during touch
+  }
+
+  // ============================================================================
+  // TOUCH INPUT HANDLING
+  // ============================================================================
+  
+  private handleTouchStart(event: TouchEvent): void {
+    event.preventDefault()
+    
+    for (let i = 0; i < event.changedTouches.length; i++) {
+      const touch = event.changedTouches[i]
+      const touchInfo = {
+        x: touch.clientX,
+        y: touch.clientY,
+        startX: touch.clientX,
+        startY: touch.clientY
+      }
+      
+      this.touchState.activeTouches.set(touch.identifier, touchInfo)
+      
+      // First touch = movement (one finger for WASD navigation)
+      // Second touch = looking (two fingers for camera rotation)
+      if (this.touchState.movementTouch === null) {
+        this.touchState.movementTouch = touch.identifier
+        // Reset movement direction when starting new touch
+        this.touchState.movementDirection.set(0, 0)
+      } else if (this.touchState.lookTouch === null) {
+        this.touchState.lookTouch = touch.identifier
+      }
+    }
+  }
+  
+  private handleTouchMove(event: TouchEvent): void {
+    event.preventDefault()
+    
+    for (let i = 0; i < event.changedTouches.length; i++) {
+      const touch = event.changedTouches[i]
+      const touchId = touch.identifier
+      const touchInfo = this.touchState.activeTouches.get(touchId)
+      
+      if (!touchInfo) continue
+      
+      const deltaX = touch.clientX - touchInfo.x
+      const deltaY = touch.clientY - touchInfo.y
+      
+      // Update touch position
+      touchInfo.x = touch.clientX
+      touchInfo.y = touch.clientY
+      
+      // Movement touch (one finger) - controls WASD movement
+      if (touchId === this.touchState.movementTouch) {
+        // Calculate movement direction based on touch position relative to start
+        // This allows continuous movement while finger is down
+        const totalDeltaX = touch.clientX - touchInfo.startX
+        const totalDeltaY = touch.clientY - touchInfo.startY
+        
+        // Normalize and scale movement direction for smooth analog-like input
+        const maxDistance = 100 // Maximum distance for full movement
+        const distance = Math.sqrt(totalDeltaX * totalDeltaX + totalDeltaY * totalDeltaY)
+        const normalizedDistance = Math.min(distance / maxDistance, 1.0)
+        
+        if (distance > 10) { // Deadzone to prevent accidental movement
+          // Calculate direction vector
+          const dirX = totalDeltaX / distance
+          const dirY = -totalDeltaY / distance // Invert Y for forward/back
+          
+          // Store normalized movement direction (magnitude 0-1)
+          this.touchState.movementDirection.set(dirX * normalizedDistance, dirY * normalizedDistance)
+          this.touchState.lastMovementDelta.set(totalDeltaX, -totalDeltaY)
+        } else {
+          // Within deadzone, no movement
+          this.touchState.movementDirection.set(0, 0)
+          this.touchState.lastMovementDelta.set(0, 0)
+        }
+      }
+      
+      // Look touch (two fingers) - controls camera rotation
+      if (touchId === this.touchState.lookTouch) {
+        // Store look delta for camera rotation (smooth continuous rotation)
+        this.touchState.lastLookDelta.set(deltaX, deltaY)
+      }
+    }
+    
+    // Update input state to process touch movement
+    this.updateInputState()
+  }
+  
+  private handleTouchEnd(event: TouchEvent): void {
+    event.preventDefault()
+    
+    for (let i = 0; i < event.changedTouches.length; i++) {
+      const touch = event.changedTouches[i]
+      const touchId = touch.identifier
+      
+      this.touchState.activeTouches.delete(touchId)
+      
+      // Reset movement/look touch assignments
+      if (touchId === this.touchState.movementTouch) {
+        this.touchState.movementTouch = null
+        this.touchState.lastMovementDelta.set(0, 0)
+        this.touchState.movementDirection.set(0, 0)
+        
+        // If there's another touch, make it the movement touch
+        const remainingTouches = Array.from(this.touchState.activeTouches.keys())
+        if (remainingTouches.length > 0) {
+          this.touchState.movementTouch = remainingTouches[0]
+          this.touchState.lookTouch = null
+        }
+      } else if (touchId === this.touchState.lookTouch) {
+        this.touchState.lookTouch = null
+        this.touchState.lastLookDelta.set(0, 0)
+      }
+    }
+    
+    // Clear all deltas when no touches remain
+    if (this.touchState.activeTouches.size === 0) {
+      this.touchState.lastMovementDelta.set(0, 0)
+      this.touchState.lastLookDelta.set(0, 0)
+      this.touchState.movementDirection.set(0, 0)
+      this.updateInputState()
+    }
+  }
+  
+  private handleTouchCancel(event: TouchEvent): void {
+    // Same as touch end
+    this.handleTouchEnd(event)
   }
 
   // ============================================================================
@@ -549,17 +726,18 @@ export class PlayerController {
     // Update camera position through camera manager
     this.cameraManager.setPlayerPosition(this.state.position)
     
-    // Handle gamepad camera rotation (right stick)
+    // Handle camera rotation from gamepad or touch (two fingers)
     if (this.input.analogCamera && this.input.analogCamera.length() > 0.1) {
       const cameraX = this.input.analogCamera.x
       const cameraY = this.input.analogCamera.y
       
       // Apply deadzone
-      const deadzone = 0.1
+      const deadzone = 0.05 // Smaller deadzone for touch input
       const adjustedX = Math.abs(cameraX) > deadzone ? cameraX : 0
       const adjustedY = Math.abs(cameraY) > deadzone ? cameraY : 0
       
       // Update camera rotation through camera manager
+      // For touch input, pass the raw delta values (they're already scaled in updateInputState)
       this.cameraManager.updatePlayerCameraFromGamepad(adjustedX, adjustedY, deltaTime)
     }
   }

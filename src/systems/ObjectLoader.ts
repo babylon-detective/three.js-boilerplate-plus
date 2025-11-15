@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { ObjectManager } from './ObjectManager'
 import { AnimationSystem } from './AnimationSystem'
 import { SHADERS, ShaderPath } from '../shaderImports'
+import objectPositionsConfig from '../config/objectPositions.json'
 
 // Shader loader utility
 interface ShaderConfig {
@@ -170,14 +171,34 @@ export class ObjectLoader {
     // Create material
     const material = await this.createMaterial(config.material)
     
+    // Load position from config file if available, otherwise use default
+    let position = config.transform.position
+    let rotation = config.transform.rotation
+    
+    // Try to load from committed config file
+    try {
+      const configPositions = objectPositionsConfig as any
+      if (configPositions[config.id]) {
+        if (configPositions[config.id].position && Array.isArray(configPositions[config.id].position) && configPositions[config.id].position.length === 3) {
+          position = configPositions[config.id].position as [number, number, number]
+        }
+        if (configPositions[config.id].rotation && Array.isArray(configPositions[config.id].rotation) && configPositions[config.id].rotation.length === 3) {
+          rotation = configPositions[config.id].rotation as [number, number, number]
+        }
+      }
+    } catch (error) {
+      // Config file not found or invalid, use defaults
+      console.warn(`⚠️ Could not load position config for ${config.id}, using defaults`)
+    }
+    
     // Create object using ObjectManager
     const managedObject = this.objectManager.createObject({
       id: config.id,
       type: config.type,
       geometry: geometry,
       material: material,
-      position: new THREE.Vector3(...config.transform.position),
-      rotation: config.transform.rotation ? new THREE.Euler(...config.transform.rotation) : undefined,
+      position: new THREE.Vector3(...position),
+      rotation: rotation ? new THREE.Euler(...rotation) : undefined,
       scale: config.transform.scale ? new THREE.Vector3(...config.transform.scale) : undefined,
       userData: { ...config.userData, id: config.id, type: config.type },
       persistPosition: true,

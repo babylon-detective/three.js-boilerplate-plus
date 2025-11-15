@@ -1122,6 +1122,10 @@ export class ConsoleCommands {
     win.getRetroConfig = () => this.getRetroConfig()
     win.applyFlatShading = () => this.applyFlatShading()
     
+    // Object Position Export/Import Commands
+    win.exportObjectPositions = () => this.exportObjectPositions()
+    win.compareObjectPositions = () => this.compareObjectPositions()
+    
     // Parameter Management Commands
     win.showParameters = () => this.showParameters()
     win.saveParameterState = (name: string) => this.saveParameterState(name)
@@ -2730,6 +2734,66 @@ export class ConsoleCommands {
     })
     
     console.log(`✅ Applied flat shading to ${count} materials`)
+    console.groupEnd()
+  }
+
+  // ============================================================================
+  // OBJECT POSITION EXPORT/IMPORT COMMANDS
+  // ============================================================================
+
+  /**
+   * Export current object positions to JSON format for committing to codebase
+   */
+  public exportObjectPositions(): void {
+    console.group('📤 Exporting Object Positions')
+    
+    const positions: { [key: string]: { position: [number, number, number], rotation: [number, number, number] } } = {}
+    
+    this.app.objectManager.getAllObjects().forEach((obj) => {
+      const pos = obj.persistentState.position
+      const rot = obj.persistentState.rotation
+      
+      positions[obj.id] = {
+        position: [pos.x, pos.y, pos.z],
+        rotation: [rot.x, rot.y, rot.z]
+      }
+    })
+    
+    const jsonString = JSON.stringify(positions, null, 2)
+    
+    console.log('📋 Copy this JSON and paste it into src/config/objectPositions.json:')
+    console.log('')
+    console.log(jsonString)
+    console.log('')
+    console.log('💡 After updating the file, commit and push to apply positions to deployed version')
+    console.groupEnd()
+    
+    // Also copy to clipboard if available
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(jsonString).then(() => {
+        console.log('✅ JSON copied to clipboard!')
+      }).catch(() => {
+        console.warn('⚠️ Could not copy to clipboard, please copy manually')
+      })
+    }
+  }
+
+  /**
+   * Show current positions vs default positions
+   */
+  public compareObjectPositions(): void {
+    console.group('🔍 Comparing Current vs Default Positions')
+    
+    this.app.objectManager.getAllObjects().forEach((obj) => {
+      const currentPos = obj.persistentState.position
+      const currentRot = obj.persistentState.rotation
+      
+      console.log(`\n${obj.id}:`)
+      console.log(`  Current Position: [${currentPos.x.toFixed(2)}, ${currentPos.y.toFixed(2)}, ${currentPos.z.toFixed(2)}]`)
+      console.log(`  Current Rotation: [${currentRot.x.toFixed(4)}, ${currentRot.y.toFixed(4)}, ${currentRot.z.toFixed(4)}]`)
+    })
+    
+    console.log('\n💡 Use exportObjectPositions() to export current positions to JSON')
     console.groupEnd()
   }
 } 

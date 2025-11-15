@@ -26,7 +26,7 @@ export class CameraManager {
   private systemCamera!: THREE.PerspectiveCamera
   private playerCamera!: THREE.PerspectiveCamera
   private currentCamera!: THREE.PerspectiveCamera
-  private currentMode: CameraMode = 'system'
+  private currentMode: CameraMode = 'player' // Default to player camera
   
   // Controls
   private orbitControls!: OrbitControls
@@ -43,6 +43,10 @@ export class CameraManager {
   // Player camera properties
   private playerPosition: THREE.Vector3 = new THREE.Vector3(0, 5, 0)
   private playerHeight: number = 1.8
+  
+  // Mouse tracking for non-pointer-lock mode
+  private lastMouseX: number | null = null
+  private lastMouseY: number | null = null
   
   // Transition properties
   private isTransitioning: boolean = false
@@ -85,8 +89,9 @@ export class CameraManager {
     this.playerCamera.position.y += this.playerHeight
     this.playerCamera.name = 'PlayerCamera'
     
-    // Set initial camera
-    this.currentCamera = this.systemCamera
+    // Set initial camera to player camera (default)
+    this.currentCamera = this.playerCamera
+    this.currentMode = 'player'
   }
 
   private initializeControls(): void {
@@ -106,7 +111,7 @@ export class CameraManager {
     
     // Player controls configuration
     this.playerControls = {
-      enabled: false,
+      enabled: this.currentMode === 'player', // Enable if starting in player mode
       mouseX: 0,
       mouseY: 0,
       pitch: 0,
@@ -123,12 +128,28 @@ export class CameraManager {
     // Pointer lock for player camera
     this.container.addEventListener('click', () => {
       if (this.currentMode === 'player') {
-        this.container.requestPointerLock()
+        this.container.requestPointerLock().catch(() => {
+          // Pointer lock may fail if not user-initiated, that's okay
+        })
       }
     })
     
     // Handle pointer lock change
     document.addEventListener('pointerlockchange', this.onPointerLockChange.bind(this))
+    
+    // Auto-request pointer lock on initial load if in player mode
+    // This allows trackpad/mouse input to work immediately
+    if (this.currentMode === 'player') {
+      // Request pointer lock after a short delay to ensure page is fully loaded
+      setTimeout(() => {
+        if (this.currentMode === 'player' && document.pointerLockElement !== this.container) {
+          this.container.requestPointerLock().catch(() => {
+            // Pointer lock requires user interaction, so this may fail initially
+            // User will need to click once to enable it
+          })
+        }
+      }, 100)
+    }
     
     // Window resize
     window.addEventListener('resize', this.onWindowResize.bind(this))
@@ -210,12 +231,52 @@ export class CameraManager {
   // ============================================================================
 
   private onMouseMove(event: MouseEvent): void {
-    if (!this.playerControls.enabled || document.pointerLockElement !== this.container) {
+    // Only process mouse movement if player controls are enabled
+    if (!this.playerControls.enabled) {
       return
     }
-
-    const movementX = event.movementX || 0
-    const movementY = event.movementY || 0
+    
+    // For trackpad/mouse input, we can work without pointer lock
+    // Pointer lock is preferred but not required for basic mouse movement
+    // Check if we have movementX/Y (pointer lock) or calculate from clientX/Y (normal mouse)
+    let movementX = 0
+    let movementY = 0
+    
+    if (document.pointerLockElement === this.container) {
+      // Pointer lock mode - use movementX/Y directly
+      movementX = event.movementX || 0
+      movementY = event.movementY || 0
+    } else {
+      // Normal mouse mode - calculate movement from position change
+      // This allows trackpad to work without pointer lock
+      const rect = this.container.getBoundingClientRect()
+      const centerX = rect.left + rect.width / 2
+      const centerY = rect.top + rect.height / 2
+      
+      // Only process if mouse is over the container
+      if (event.clientX >= rect.left && event.clientX <= rect.right &&
+          event.clientY >= rect.top && event.clientY <= rect.bottom) {
+        // Calculate movement relative to center (normalized)
+        movementX = (event.clientX - centerX) * 0.1
+        movementY = (event.clientY - centerY) * 0.1
+        
+        // Reset to center for next frame (this is a workaround for non-pointer-lock mode)
+        // In practice, we'll use the delta from the last position
+        if (this.lastMouseX === null || this.lastMouseY === null) {
+          this.lastMouseX = event.clientX
+          this.lastMouseY = event.clientY
+          return // Skip first frame
+        }
+        
+        movementX = (event.clientX - this.lastMouseX) * this.playerControls.sensitivity * 100
+        movementY = (event.clientY - this.lastMouseY) * this.playerControls.sensitivity * 100
+        
+        this.lastMouseX = event.clientX
+        this.lastMouseY = event.clientY
+      } else {
+        return // Mouse not over container
+      }
+    }
 
     this.playerControls.yaw -= movementX * this.playerControls.sensitivity
     this.playerControls.pitch -= movementY * this.playerControls.sensitivity  // Standard: Mouse UP = Look UP

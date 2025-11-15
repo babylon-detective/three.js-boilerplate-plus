@@ -1,0 +1,27 @@
+{
+  "shader-plane": {
+    "position": [-6, 0, 0],
+    "rotation": [-0.7853981633974483, 0, 0]
+  },
+  "hologram": {
+    "position": [6, 0, 0],
+    "rotation": [0, 0, 0]
+  },
+  "animated-0": {
+    "position": [-4.5, 10, 0],
+    "rotation": [0, 0, 0]
+  },
+  "animated-1": {
+    "position": [-1.5, 30, 0],
+    "rotation": [0, 0, 0]
+  },
+  "animated-2": {
+    "position": [1.5, 30, 0],
+    "rotation": [0, 0, 0]
+  },
+  "animated-3": {
+    "position": [4.5, 10, 0],
+    "rotation": [0, 0, 0]
+  }
+}
+
