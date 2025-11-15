@@ -111,7 +111,7 @@ export class CameraManager {
     
     // Player controls configuration
     this.playerControls = {
-      enabled: this.currentMode === 'player', // Enable if starting in player mode
+      enabled: true, // Start enabled (player camera is default)
       mouseX: 0,
       mouseY: 0,
       pitch: 0,

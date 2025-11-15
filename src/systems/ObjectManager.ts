@@ -332,7 +332,11 @@ export class ObjectManager {
   public loadPersistentStates(): void {
     try {
       const savedData = localStorage.getItem('objectManager_persistentStates')
-      if (!savedData) return
+      if (!savedData) {
+        // No saved data - save current positions as defaults for next time
+        this.savePersistentStates()
+        return
+      }
       
       const persistentData = JSON.parse(savedData)
       let restoredCount = 0
@@ -383,10 +387,10 @@ export class ObjectManager {
         }
       })
       
-      // console.log(`📂 Restored ${restoredCount} object states from localStorage`)
+      console.log(`📂 Restored ${restoredCount} object states from localStorage`)
       
     } catch (error) {
-      // console.warn('⚠️ Failed to load persistent states:', error)
+      console.warn('⚠️ Failed to load persistent states:', error)
     }
   }
   

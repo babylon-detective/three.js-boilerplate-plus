@@ -1256,8 +1256,20 @@ class IntegratedThreeJSApp {
     // Load all objects using the unified ObjectLoader system
     await ObjectLoader.loadDefaultScene()
     
-    // Load saved positions using ObjectManager
+    // CRITICAL FIX: Load saved positions AFTER objects are created
+    // This ensures saved positions override default positions from JSON config
     this.objectManager.loadPersistentStates()
+    
+    // Log loaded positions for debugging
+    const allObjects = this.objectManager.getAllObjects()
+    const tslObjects = allObjects.filter(obj => obj.type === 'tsl' || obj.id.includes('tsl'))
+    if (tslObjects.length > 0) {
+      console.log(`📦 Loaded ${tslObjects.length} TSL objects with positions:`)
+      tslObjects.forEach(obj => {
+        const pos = obj.persistentState.position
+        console.log(`  ${obj.id}: (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`)
+      })
+    }
     
     // Load saved camera state
     const cameraLoaded = this.objectManager.loadCameraState()
@@ -1400,7 +1412,12 @@ class IntegratedThreeJSApp {
       pointer-events: none;
       transition: all 0.3s ease;
     `
-    indicator.textContent = 'System Camera'
+    // Initialize with current camera mode from camera manager
+    const currentMode = this.cameraManager.getCurrentMode()
+    indicator.textContent = currentMode === 'player' ? 'Player Camera' : 'System Camera'
+    if (currentMode === 'player') {
+      indicator.style.background = 'rgba(0, 128, 0, 0.8)'
+    }
     document.body.appendChild(indicator)
   }
 

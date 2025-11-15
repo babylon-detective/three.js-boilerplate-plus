@@ -84,16 +84,16 @@ export class PlayerController {
   
   // Touch input handling
   private touchState: {
-    activeTouches: Map<number, { x: number, y: number, startX: number, startY: number }>
-    movementTouch: number | null // ID of touch used for movement (one finger)
-    lookTouch: number | null // ID of touch used for looking (two fingers)
+    activeTouches: Map<number, { x: number, y: number, startX: number, startY: number, prevX: number, prevY: number }>
+    movementTouch: number | null // ID of touch used for movement (one finger when only one touch)
+    lookTouches: number[] // IDs of touches used for looking (two fingers)
     lastMovementDelta: THREE.Vector2
     lastLookDelta: THREE.Vector2
     movementDirection: THREE.Vector2 // Continuous movement direction from touch position
   } = {
     activeTouches: new Map(),
     movementTouch: null,
-    lookTouch: null,
+    lookTouches: [],
     lastMovementDelta: new THREE.Vector2(),
     lastLookDelta: new THREE.Vector2(),
     movementDirection: new THREE.Vector2() // For continuous movement based on touch position
@@ -323,12 +323,15 @@ export class PlayerController {
     }
     
     // Touch camera input (two fingers for looking)
-    if (this.touchState.lastLookDelta.length() > 0.1) {
+    // Only use touch camera input when we have two or more touches (camera look mode)
+    if (this.touchState.lookTouches.length >= 2) {
       // Convert touch delta to camera rotation
       // Use higher sensitivity for touch since deltas are pixel-based
       const lookSensitivity = 0.003 // Increased for better touch responsiveness
+      // Use the look delta even if small - let the camera manager handle deadzone
       this.input.analogCamera = this.touchState.lastLookDelta.clone().multiplyScalar(lookSensitivity)
     } else {
+      // No two-finger touch, use gamepad or clear
       this.input.analogCamera = this.gamepadInput.camera.clone()
     }
     
@@ -349,26 +352,53 @@ export class PlayerController {
         x: touch.clientX,
         y: touch.clientY,
         startX: touch.clientX,
-        startY: touch.clientY
+        startY: touch.clientY,
+        prevX: touch.clientX,
+        prevY: touch.clientY
       }
       
       this.touchState.activeTouches.set(touch.identifier, touchInfo)
-      
-      // First touch = movement (one finger for WASD navigation)
-      // Second touch = looking (two fingers for camera rotation)
-      if (this.touchState.movementTouch === null) {
-        this.touchState.movementTouch = touch.identifier
-        // Reset movement direction when starting new touch
-        this.touchState.movementDirection.set(0, 0)
-      } else if (this.touchState.lookTouch === null) {
-        this.touchState.lookTouch = touch.identifier
-      }
+    }
+    
+    // Reassign touch roles based on total number of touches
+    this.reassignTouchRoles()
+  }
+  
+  /**
+   * Reassign touch roles: one finger = movement, two fingers = camera look
+   */
+  private reassignTouchRoles(): void {
+    const touchCount = this.touchState.activeTouches.size
+    
+    if (touchCount === 0) {
+      // No touches - clear everything
+      this.touchState.movementTouch = null
+      this.touchState.lookTouches = []
+      this.touchState.movementDirection.set(0, 0)
+      this.touchState.lastLookDelta.set(0, 0)
+    } else if (touchCount === 1) {
+      // One finger = movement only
+      const touchId = Array.from(this.touchState.activeTouches.keys())[0]
+      this.touchState.movementTouch = touchId
+      this.touchState.lookTouches = []
+      // Reset movement direction when starting new touch
+      this.touchState.movementDirection.set(0, 0)
+    } else {
+      // Two or more fingers = camera look only (use first two touches)
+      this.touchState.movementTouch = null
+      this.touchState.movementDirection.set(0, 0)
+      const touchIds = Array.from(this.touchState.activeTouches.keys())
+      this.touchState.lookTouches = touchIds.slice(0, 2) // Use first two touches for camera
     }
   }
   
   private handleTouchMove(event: TouchEvent): void {
     event.preventDefault()
     
+    // Store deltas for look touches before updating positions
+    const lookTouchDeltas: Array<{ deltaX: number, deltaY: number }> = []
+    
+    // Update touch positions and calculate deltas
     for (let i = 0; i < event.changedTouches.length; i++) {
       const touch = event.changedTouches[i]
       const touchId = touch.identifier
@@ -376,19 +406,41 @@ export class PlayerController {
       
       if (!touchInfo) continue
       
+      // Calculate delta from current position BEFORE updating
       const deltaX = touch.clientX - touchInfo.x
       const deltaY = touch.clientY - touchInfo.y
       
-      // Update touch position
+      // Store delta if this is a look touch
+      if (this.touchState.lookTouches.includes(touchId)) {
+        lookTouchDeltas.push({ deltaX, deltaY })
+      }
+      
+      // Update previous position for next frame
+      touchInfo.prevX = touchInfo.x
+      touchInfo.prevY = touchInfo.y
+      
+      // Update current position
       touchInfo.x = touch.clientX
       touchInfo.y = touch.clientY
-      
-      // Movement touch (one finger) - controls WASD movement
-      if (touchId === this.touchState.movementTouch) {
+    }
+    
+    // Reassign roles if touch count changed
+    const currentTouchCount = this.touchState.activeTouches.size
+    const expectedMovementTouch = this.touchState.movementTouch !== null ? 1 : 0
+    const expectedLookTouches = this.touchState.lookTouches.length
+    const expectedTotal = expectedMovementTouch + expectedLookTouches
+    
+    if (currentTouchCount !== expectedTotal) {
+      this.reassignTouchRoles()
+    }
+    
+    // Process movement touch (one finger)
+    if (this.touchState.movementTouch !== null) {
+      const touchInfo = this.touchState.activeTouches.get(this.touchState.movementTouch)
+      if (touchInfo) {
         // Calculate movement direction based on touch position relative to start
-        // This allows continuous movement while finger is down
-        const totalDeltaX = touch.clientX - touchInfo.startX
-        const totalDeltaY = touch.clientY - touchInfo.startY
+        const totalDeltaX = touchInfo.x - touchInfo.startX
+        const totalDeltaY = touchInfo.y - touchInfo.startY
         
         // Normalize and scale movement direction for smooth analog-like input
         const maxDistance = 100 // Maximum distance for full movement
@@ -409,12 +461,38 @@ export class PlayerController {
           this.touchState.lastMovementDelta.set(0, 0)
         }
       }
+    }
+    
+    // Process look touches (two fingers) - average the movement of both touches
+    if (this.touchState.lookTouches.length >= 2) {
+      // Calculate deltas for all look touches (not just changed ones)
+      let totalDeltaX = 0
+      let totalDeltaY = 0
+      let validTouches = 0
       
-      // Look touch (two fingers) - controls camera rotation
-      if (touchId === this.touchState.lookTouch) {
-        // Store look delta for camera rotation (smooth continuous rotation)
-        this.touchState.lastLookDelta.set(deltaX, deltaY)
+      for (const touchId of this.touchState.lookTouches) {
+        const touchInfo = this.touchState.activeTouches.get(touchId)
+        if (touchInfo) {
+          // Calculate delta from previous position
+          const deltaX = touchInfo.x - touchInfo.prevX
+          const deltaY = touchInfo.y - touchInfo.prevY
+          
+          // Accumulate deltas (even small ones for responsiveness)
+          totalDeltaX += deltaX
+          totalDeltaY += deltaY
+          validTouches++
+        }
       }
+      
+      if (validTouches > 0) {
+        // Average the deltas from both touches for smooth camera rotation
+        const avgDeltaX = totalDeltaX / validTouches
+        const avgDeltaY = totalDeltaY / validTouches
+        this.touchState.lastLookDelta.set(avgDeltaX, avgDeltaY)
+      }
+    } else {
+      // Not enough touches for camera look
+      this.touchState.lastLookDelta.set(0, 0)
     }
     
     // Update input state to process touch movement
@@ -429,24 +507,10 @@ export class PlayerController {
       const touchId = touch.identifier
       
       this.touchState.activeTouches.delete(touchId)
-      
-      // Reset movement/look touch assignments
-      if (touchId === this.touchState.movementTouch) {
-        this.touchState.movementTouch = null
-        this.touchState.lastMovementDelta.set(0, 0)
-        this.touchState.movementDirection.set(0, 0)
-        
-        // If there's another touch, make it the movement touch
-        const remainingTouches = Array.from(this.touchState.activeTouches.keys())
-        if (remainingTouches.length > 0) {
-          this.touchState.movementTouch = remainingTouches[0]
-          this.touchState.lookTouch = null
-        }
-      } else if (touchId === this.touchState.lookTouch) {
-        this.touchState.lookTouch = null
-        this.touchState.lastLookDelta.set(0, 0)
-      }
     }
+    
+    // Reassign touch roles based on remaining touches
+    this.reassignTouchRoles()
     
     // Clear all deltas when no touches remain
     if (this.touchState.activeTouches.size === 0) {
