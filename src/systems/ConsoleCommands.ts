@@ -2611,4 +2611,125 @@ export class ConsoleCommands {
     
     console.groupEnd()
   }
+
+  // ============================================================================
+  // RETRO POST-PROCESSING COMMANDS
+  // ============================================================================
+
+  public setRetroEnabled(enabled: boolean): void {
+    if (!this.app.retroPostProcessing) {
+      console.error('❌ Retro post-processing system not available')
+      return
+    }
+    this.app.retroPostProcessing.setEnabled(enabled)
+    console.log(`🎮 Retro post-processing ${enabled ? 'enabled' : 'disabled'}`)
+  }
+
+  public setRetroPixelSize(size: number): void {
+    if (!this.app.retroPostProcessing) {
+      console.error('❌ Retro post-processing system not available')
+      return
+    }
+    if (size < 1.0) {
+      console.error('❌ Pixel size must be >= 1.0')
+      return
+    }
+    this.app.retroPostProcessing.setPixelSize(size)
+    console.log(`🎮 Retro pixel size set to ${size}`)
+  }
+
+  public setRetroColorLevels(levels: number): void {
+    if (!this.app.retroPostProcessing) {
+      console.error('❌ Retro post-processing system not available')
+      return
+    }
+    if (levels < 2) {
+      console.error('❌ Color levels must be >= 2')
+      return
+    }
+    this.app.retroPostProcessing.setColorLevels(levels)
+    console.log(`🎮 Retro color levels set to ${levels}`)
+  }
+
+  public setRetroDitherAmount(amount: number): void {
+    if (!this.app.retroPostProcessing) {
+      console.error('❌ Retro post-processing system not available')
+      return
+    }
+    if (amount < 0 || amount > 1) {
+      console.error('❌ Dither amount must be between 0 and 1')
+      return
+    }
+    this.app.retroPostProcessing.setDitherAmount(amount)
+    console.log(`🎮 Retro dither amount set to ${amount}`)
+  }
+
+  public setRetroResolutionScale(scale: number): void {
+    if (!this.app.retroPostProcessing) {
+      console.error('❌ Retro post-processing system not available')
+      return
+    }
+    if (scale < 0.25 || scale > 1.0) {
+      console.error('❌ Resolution scale must be between 0.25 and 1.0')
+      return
+    }
+    this.app.retroPostProcessing.setResolutionScale(scale)
+    console.log(`🎮 Retro resolution scale set to ${scale}`)
+  }
+
+  public getRetroConfig(): void {
+    if (!this.app.retroPostProcessing) {
+      console.error('❌ Retro post-processing system not available')
+      return
+    }
+    const config = this.app.retroPostProcessing.getConfig()
+    console.group('🎮 Retro Post-Processing Config')
+    console.log(`Enabled: ${config.enabled}`)
+    console.log(`Pixel Size: ${config.pixelSize}`)
+    console.log(`Color Levels: ${config.colorLevels}`)
+    console.log(`Dither Amount: ${config.ditherAmount}`)
+    console.log(`Contrast: ${config.contrast}`)
+    console.log(`Saturation: ${config.saturation}`)
+    console.log(`Resolution Scale: ${config.resolutionScale}`)
+    console.groupEnd()
+  }
+
+  public applyFlatShading(): void {
+    console.group('🎨 Applying Flat Shading to All Materials')
+    let count = 0
+    
+    this.app.scene.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        const material = object.material
+        
+        if (material instanceof THREE.MeshStandardMaterial) {
+          material.flatShading = true
+          material.needsUpdate = true
+          count++
+        } else if (material instanceof THREE.MeshLambertMaterial) {
+          material.flatShading = true
+          material.needsUpdate = true
+          count++
+        } else if (material instanceof THREE.MeshPhongMaterial) {
+          material.flatShading = true
+          material.needsUpdate = true
+          count++
+        } else if (material instanceof THREE.MeshPhysicalMaterial) {
+          // Convert to MeshStandardMaterial with flat shading
+          const newMaterial = new THREE.MeshStandardMaterial({
+            color: material.color,
+            metalness: material.metalness,
+            roughness: material.roughness,
+            emissive: material.emissive,
+            flatShading: true
+          })
+          object.material = newMaterial
+          count++
+        }
+      }
+    })
+    
+    console.log(`✅ Applied flat shading to ${count} materials`)
+    console.groupEnd()
+  }
 } 
